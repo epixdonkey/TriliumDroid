@@ -22,6 +22,11 @@ object ConfigureFabsDialog {
 	const val NOTE_MAP: String = "noteMap"
 	const val NOTE_METADATA: String = "noteMetadata"
 	const val SYNC: String = "sync"
+	const val JOURNAL: String = "journal"
+	const val NEW_NOTE: String = "newNote"
+	const val NEW_NOTE_SIBLING: String = "newNoteSibling"
+	const val SCROLL_TO_NOTE: String = "scrollToNote"
+	const val COLLAPSE_TREE: String = "collapseTree"
 
 	/**
 	 * See [eu.fliegendewurst.triliumdroid.activity.main.MainActivity.performAction],
@@ -36,7 +41,12 @@ object ConfigureFabsDialog {
 		Pair(DELETE_NOTE, R.id.action_delete),
 		Pair(NOTE_MAP, R.id.action_note_map),
 		Pair(NOTE_METADATA, R.id.action_note_metadata),
-		Pair(SYNC, R.id.action_sync)
+		Pair(SYNC, R.id.action_sync),
+		Pair(JOURNAL, R.id.action_journal),
+		Pair(NEW_NOTE, R.id.action_new_note),
+		Pair(NEW_NOTE_SIBLING, R.id.action_new_note_sibling),
+		Pair(SCROLL_TO_NOTE, R.id.action_scroll_to_note),
+		Pair(COLLAPSE_TREE, R.id.action_collapse_tree)
 	)
 
 	fun init() {
@@ -46,19 +56,27 @@ object ConfigureFabsDialog {
 			if (getPref(action) == null) {
 				when (action) {
 					"showNoteTree" -> {
-						setPref(action, left = !haveLeftAction, right = false, show = false)
+						setPref(action, left = !haveLeftAction, right = false, top = false, tree = false, show = false)
 					}
 
 					"jumpToNote" -> {
-						setPref(action, left = false, right = false, show = true)
+						setPref(action, left = false, right = false, top = false, tree = false, show = true)
 					}
 
 					NOTE_NAVIGATION -> {
-						setPref(action, left = false, right = !haveRightAction, show = false)
+						setPref(action, left = false, right = !haveRightAction, top = false, tree = false, show = false)
+					}
+
+					EDIT_NOTE, SHARE_NOTE -> {
+						setPref(action, left = false, right = false, top = true, tree = false, show = true)
+					}
+
+					NEW_NOTE, NEW_NOTE_SIBLING, SCROLL_TO_NOTE, COLLAPSE_TREE -> {
+						setPref(action, left = false, right = false, top = false, tree = true, show = false)
 					}
 
 					else -> {
-						setPref(action, left = false, right = false, show = true)
+						setPref(action, left = false, right = false, top = false, tree = false, show = true)
 					}
 				}
 			}
@@ -96,60 +114,40 @@ object ConfigureFabsDialog {
 			vi!!.findViewById<TextView>(R.id.label_fab_action).text =
 				labels[actions.keys.indexOf(action)]
 			val settingsInitial = getPref(action)!!
-			val left = vi.findViewById<RadioButton>(R.id.button_fab_left)
-			val right = vi.findViewById<RadioButton>(R.id.button_fab_right)
+			val left = vi.findViewById<CheckBox>(R.id.button_fab_left)
+			val right = vi.findViewById<CheckBox>(R.id.button_fab_right)
+			val top = vi.findViewById<CheckBox>(R.id.checkbox_fab_top)
+			val tree = vi.findViewById<CheckBox>(R.id.checkbox_fab_tree)
 			val show = vi.findViewById<CheckBox>(R.id.checkbox_fab_show)
 			left.setOnCheckedChangeListener(null)
 			right.setOnCheckedChangeListener(null)
+			top.setOnCheckedChangeListener(null)
+			tree.setOnCheckedChangeListener(null)
 			show.setOnCheckedChangeListener(null)
 			left.isChecked = settingsInitial.left
 			right.isChecked = settingsInitial.right
+			top.isChecked = settingsInitial.top
+			tree.isChecked = settingsInitial.tree
 			show.isChecked = settingsInitial.show
-			left.setOnClickListener {
-				val isChecked = left.isChecked
+			left.setOnCheckedChangeListener { _, isChecked ->
 				val settings = getPref(action)!!
-				// special case: user clicks on checked radio button again
-				if (isChecked && settings.left) {
-					setPref(action, false, settings.right, settings.show)
-					left.isChecked = false
-					return@setOnClickListener
-				}
-				setPref(action, isChecked, settings.right, settings.show)
-				for (otherAction in actions.keys) {
-					if (action == otherAction) {
-						continue
-					}
-					val o = getPref(otherAction)!!
-					if (o.left) {
-						setPref(otherAction, false, o.right, o.show)
-					}
-				}
-				(list.adapter as ListAdapter<*>).notifyDataSetChanged()
+				setPref(action, isChecked, settings.right, settings.top, settings.tree, settings.show)
 			}
-			right.setOnClickListener {
-				val isChecked = right.isChecked
+			right.setOnCheckedChangeListener { _, isChecked ->
 				val settings = getPref(action)!!
-				// special case: user clicks on checked radio button again
-				if (isChecked && getPref(action)?.right == true) {
-					setPref(action, settings.left, false, settings.show)
-					right.isChecked = false
-					return@setOnClickListener
-				}
-				setPref(action, settings.left, isChecked, settings.show)
-				for (otherAction in actions.keys) {
-					if (action == otherAction) {
-						continue
-					}
-					val o = getPref(otherAction)!!
-					if (o.right) {
-						setPref(otherAction, o.left, false, o.show)
-					}
-				}
-				(list.adapter as ListAdapter<*>).notifyDataSetChanged()
+				setPref(action, settings.left, isChecked, settings.top, settings.tree, settings.show)
+			}
+			top.setOnCheckedChangeListener { _, isChecked ->
+				val settings = getPref(action)!!
+				setPref(action, settings.left, settings.right, isChecked, settings.tree, settings.show)
+			}
+			tree.setOnCheckedChangeListener { _, isChecked ->
+				val settings = getPref(action)!!
+				setPref(action, settings.left, settings.right, settings.top, isChecked, settings.show)
 			}
 			show.setOnCheckedChangeListener { _, isChecked ->
 				val settings = getPref(action)!!
-				setPref(action, settings.left, settings.right, isChecked)
+				setPref(action, settings.left, settings.right, settings.top, settings.tree, isChecked)
 			}
 			return@ListAdapter vi
 		}
@@ -169,13 +167,17 @@ object ConfigureFabsDialog {
 		} else {
 			null
 		}
+		val defaultTop = action == EDIT_NOTE || action == SHARE_NOTE
+		val top = prefs.getBoolean("fab_${action}_top", defaultTop)
+		val defaultTree = action == NEW_NOTE || action == NEW_NOTE_SIBLING || action == SCROLL_TO_NOTE || action == COLLAPSE_TREE
+		val tree = prefs.getBoolean("fab_${action}_tree", defaultTree)
 		val show = if (prefs.contains("fab_${action}_show")) {
 			prefs.getBoolean("fab_${action}_show", false)
 		} else {
 			null
 		}
 		return if (left != null) {
-			ActionPref(left, right!!, show!!, actions[action]!!)
+			ActionPref(left, right!!, top, tree, show!!, actions[action]!!)
 		} else {
 			null
 		}
@@ -184,6 +186,8 @@ object ConfigureFabsDialog {
 	data class ActionPref(
 		val left: Boolean,
 		val right: Boolean,
+		val top: Boolean,
+		val tree: Boolean,
 		val show: Boolean,
 		val id: Int,
 	)
@@ -192,21 +196,37 @@ object ConfigureFabsDialog {
 		action: String,
 		left: Boolean,
 		right: Boolean,
+		top: Boolean,
+		tree: Boolean,
 		show: Boolean
 	) {
 		Preferences.prefs.edit()
 			.putBoolean("fab_${action}_left", left)
 			.putBoolean("fab_${action}_right", right)
+			.putBoolean("fab_${action}_top", top)
+			.putBoolean("fab_${action}_tree", tree)
 			.putBoolean("fab_${action}_show", show)
 			.apply()
 	}
 
+	fun getLeftActions(): List<String> {
+		return actions.keys.filter { Preferences.isLeftAction(it) }
+	}
+
+	fun getRightActions(): List<String> {
+		return actions.keys.filter { Preferences.isRightAction(it) }
+	}
+
+	fun getTreeActions(): List<String> {
+		return actions.keys.filter { getPref(it)?.tree == true }
+	}
+
 	fun getLeftAction(): String? {
-		return actions.keys.firstOrNull { Preferences.isLeftAction(it) }
+		return getLeftActions().firstOrNull()
 	}
 
 	fun getRightAction(): String? {
-		return actions.keys.firstOrNull { Preferences.isRightAction(it) }
+		return getRightActions().firstOrNull()
 	}
 
 	fun getIcon(action: String?): Int {
@@ -248,6 +268,26 @@ object ConfigureFabsDialog {
 
 			"sync" -> {
 				return R.drawable.bx_refresh
+			}
+
+			JOURNAL -> {
+				return R.drawable.bx_calendar
+			}
+
+			NEW_NOTE -> {
+				return R.drawable.bx_file_blank_child
+			}
+
+			NEW_NOTE_SIBLING -> {
+				return R.drawable.bx_file_blank_next
+			}
+
+			SCROLL_TO_NOTE -> {
+				return R.drawable.bx_target_lock
+			}
+
+			COLLAPSE_TREE -> {
+				return R.drawable.bx_collapse_vertical
 			}
 
 			else -> {

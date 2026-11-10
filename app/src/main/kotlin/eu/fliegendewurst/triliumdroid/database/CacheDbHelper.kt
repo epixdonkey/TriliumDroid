@@ -489,6 +489,23 @@ class CacheDbHelper(context: Context, private val sql: String) :
 					execSQL("ALTER TABLE revisions ADD COLUMN description TEXT DEFAULT '' NOT NULL")
 					execSQL("ALTER TABLE revisions ADD COLUMN source TEXT DEFAULT 'auto' NOT NULL")
 				}
+				if (oldVersion < 242 && newVersion >= 242) {
+					Log.i(TAG, "migrating to version 242: cleanup _help entities")
+					execSQL("""DELETE FROM entity_changes WHERE entityName = 'branches' AND entityId IN
+						(SELECT branchId FROM branches WHERE noteId LIKE '\_help%' ESCAPE '\' OR parentNoteId LIKE '\_help%' ESCAPE '\')""")
+					execSQL("""DELETE FROM entity_changes WHERE entityName = 'attributes' AND entityId IN
+						(SELECT attributeId FROM attributes WHERE noteId LIKE '\_help%' ESCAPE '\')""")
+					execSQL("""DELETE FROM entity_changes WHERE entityName = 'revisions' AND entityId IN
+						(SELECT revisionId FROM revisions WHERE noteId LIKE '\_help%' ESCAPE '\')""")
+					execSQL("""DELETE FROM entity_changes WHERE entityName = 'attachments' AND entityId IN
+						(SELECT attachmentId FROM attachments WHERE ownerId LIKE '\_help%' ESCAPE '\')""")
+					execSQL("DELETE FROM entity_changes WHERE entityId LIKE '\\_help%' ESCAPE '\\'")
+					execSQL("DELETE FROM branches WHERE noteId LIKE '\\_help%' ESCAPE '\\' OR parentNoteId LIKE '\\_help%' ESCAPE '\\'")
+					execSQL("DELETE FROM attributes WHERE noteId LIKE '\\_help%' ESCAPE '\\'")
+					execSQL("DELETE FROM revisions WHERE noteId LIKE '\\_help%' ESCAPE '\\'")
+					execSQL("DELETE FROM attachments WHERE ownerId LIKE '\\_help%' ESCAPE '\\'")
+					execSQL("DELETE FROM notes WHERE noteId LIKE '\\_help%' ESCAPE '\\'")
+				}
 				// always update to latest version
 				execSQL(
 					"UPDATE options SET value = ? WHERE name = 'dbVersion'",

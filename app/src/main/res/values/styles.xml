@@ -44,10 +44,10 @@
     </style>
 
     <style name="WidgetInner">
-        <item name="android:padding">@dimen/smaller_margin</item>
+        <item name="android:padding">@dimen/normal_margin</item>
         <item name="android:layout_margin">@dimen/smaller_margin</item>
-        <item name="android:elevation">@dimen/medium_margin</item>
-        <item name="android:background">@color/background2</item>
+        <item name="android:elevation">2dp</item>
+        <item name="android:background">@drawable/bg_card_rounded</item>
     </style>
 
     <style name="WidgetTableHeader">

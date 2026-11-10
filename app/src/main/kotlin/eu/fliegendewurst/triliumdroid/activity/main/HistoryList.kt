@@ -17,13 +17,17 @@ class HistoryList {
 		items.lastOrNull()?.restore(activity)
 	}
 
-	fun addAndRestore(item: HistoryItem, activity: MainActivity) {
+	fun add(item: HistoryItem) {
 		// Note Navigation done? Remove from history.
 		val last = items.lastOrNull()
 		if (last is NavigationItem || last is StartItem) {
 			items.removeAt(items.size - 1)
 		}
 		items.add(item)
+	}
+
+	fun addAndRestore(item: HistoryItem, activity: MainActivity) {
+		add(item)
 		items.last().restore(activity)
 	}
 
@@ -47,6 +51,17 @@ class HistoryList {
 				}
 			}
 		}
+	}
+
+	/**
+	 * Discard the last two entries (note + editor of a discarded quick note stub)
+	 * and restore whatever was open before. Returns whether the app should close.
+	 */
+	fun goBackTwice(activity: MainActivity): Boolean {
+		if (items.isNotEmpty()) {
+			items.removeAt(items.size - 1)
+		}
+		return goBack(activity)
 	}
 
 	fun isEmpty(): Boolean = items.isEmpty() || (items.size == 1 && items.first() is StartItem)
