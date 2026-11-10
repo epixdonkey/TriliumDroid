@@ -2,6 +2,7 @@ package eu.fliegendewurst.triliumdroid.util
 
 import android.content.Context
 import android.util.Log
+import java.io.FilterInputStream
 import java.io.InputStream
 import java.util.zip.ZipFile
 import kotlin.io.path.deleteIfExists
@@ -203,8 +204,21 @@ object Assets {
 			Preferences.setCssAssetsVersion(LATEST_CSS_ASSETS)
 		}
 		val zip = ZipFile(cssZipCached.toFile())
-		val zipEntry = zip.getEntry(filename) ?: return null
-		return zip.getInputStream(zipEntry)
+		val zipEntry = zip.getEntry(filename) ?: run {
+			zip.close()
+			return null
+		}
+		// closing the returned stream must also close the ZipFile
+		// (previously leaked and only reclaimed by the finalizer)
+		return object : FilterInputStream(zip.getInputStream(zipEntry)) {
+			override fun close() {
+				try {
+					super.close()
+				} finally {
+					zip.close()
+				}
+			}
+		}
 	}
 
 	fun trimMemory() {

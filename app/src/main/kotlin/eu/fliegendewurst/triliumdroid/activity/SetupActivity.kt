@@ -21,7 +21,9 @@ import eu.fliegendewurst.triliumdroid.dialog.ConfigureSyncDialog
 import eu.fliegendewurst.triliumdroid.dialog.YesNoDialog
 import eu.fliegendewurst.triliumdroid.service.Option
 import eu.fliegendewurst.triliumdroid.sync.ConnectionUtil
+import eu.fliegendewurst.triliumdroid.util.BiometricAuthManager
 import eu.fliegendewurst.triliumdroid.util.Preferences
+import eu.fliegendewurst.triliumdroid.util.ThemeManager
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.io.File
@@ -44,6 +46,7 @@ class SetupActivity : AppCompatActivity() {
 			finish()
 		}
 		binding.toolbar.setTitle(R.string.action_settings)
+		ThemeManager.applyToToolbar(this, binding.toolbar)
 
 		val s = ConnectionUtil.status()
 		var status: Int? = R.string.status_unknown
@@ -132,6 +135,25 @@ class SetupActivity : AppCompatActivity() {
 				.setTitle(R.string.label_set_ui_language)
 				.show()
 		}
+		fun updateAccentButton() {
+			val density = resources.displayMetrics.density
+			binding.buttonChangeAccent.text =
+				"${getString(R.string.label_set_accent_theme)}: ${ThemeManager.currentThemeDisplayName()}"
+			binding.buttonChangeAccent.backgroundTintList = null
+			binding.buttonChangeAccent.background =
+				ThemeManager.createGradientDrawable(12f * density)
+			binding.buttonChangeAccent.setTextColor(
+				ThemeManager.onAccentColor()
+			)
+			ThemeManager.applyToToolbar(this, binding.toolbar)
+		}
+		updateAccentButton()
+		binding.buttonChangeAccent.setOnClickListener {
+			ThemeManager.showAccentDialog(this) {
+				updateAccentButton()
+			}
+		}
+
 		binding.buttonChangeTextSize.setOnClickListener {
 			AlertDialog.Builder(this)
 				.setSingleChoiceItems(
@@ -267,6 +289,22 @@ class SetupActivity : AppCompatActivity() {
 		}
 
 		binding.checkboxReadOnly.isChecked = Preferences.readOnlyMode()
+		binding.checkboxAutoSync.isChecked = Preferences.autoSync()
+		binding.checkboxAutoSync.setOnCheckedChangeListener { _, isChecked ->
+			Preferences.setAutoSync(isChecked)
+		}
+		binding.checkboxBiometricLock.isChecked = Preferences.biometricLock()
+		binding.checkboxBiometricLock.setOnCheckedChangeListener { buttonView, isChecked ->
+			if (isChecked && !BiometricAuthManager.canAuthenticate(this)) {
+				buttonView.isChecked = false
+				Toast.makeText(this, R.string.biometric_unavailable, Toast.LENGTH_LONG).show()
+				return@setOnCheckedChangeListener
+			}
+			Preferences.setBiometricLock(isChecked)
+			if (isChecked) {
+				BiometricAuthManager.markUnlocked()
+			}
+		}
 	}
 
 	override fun onStop() {
@@ -287,23 +325,25 @@ class SetupActivity : AppCompatActivity() {
 			Toast.makeText(this, R.string.hint_read_only_restart, Toast.LENGTH_LONG).show()
 		}
 		Preferences.setReadOnlyMode(newReadOnly)
+		Preferences.setAutoSync(binding.checkboxAutoSync.isChecked)
 	}
 
 	private fun setText() {
-		var x = ""
 		val labels = resources.getStringArray(R.array.fabs)
-		for (action in ConfigureFabsDialog.actions.keys) {
-			if (ConfigureFabsDialog.getPref(action)!!.left) {
-				val label = labels[ConfigureFabsDialog.actions.keys.indexOf(action)]
-				x = label
-			}
-		}
-		for (action in ConfigureFabsDialog.actions.keys) {
-			if (ConfigureFabsDialog.getPref(action)!!.right) {
-				val label = labels[ConfigureFabsDialog.actions.keys.indexOf(action)]
-				x = "$x, $label"
-			}
-		}
-		binding.inputFab.text = x
+		val keys = ConfigureFabsDialog.actions.keys.toList()
+		val leftLabels = keys.filter { ConfigureFabsDialog.getPref(it)?.left == true }
+			.map { labels[keys.indexOf(it)] }
+		val rightLabels = keys.filter { ConfigureFabsDialog.getPref(it)?.right == true }
+			.map { labels[keys.indexOf(it)] }
+		val topLabels = keys.filter { ConfigureFabsDialog.getPref(it)?.top == true }
+			.map { labels[keys.indexOf(it)] }
+		val treeLabels = keys.filter { ConfigureFabsDialog.getPref(it)?.tree == true }
+			.map { labels[keys.indexOf(it)] }
+		val parts = mutableListOf<String>()
+		if (leftLabels.isNotEmpty()) parts.add("L: ${leftLabels.joinToString("+")}")
+		if (rightLabels.isNotEmpty()) parts.add("R: ${rightLabels.joinToString("+")}")
+		if (topLabels.isNotEmpty()) parts.add("T: ${topLabels.joinToString("+")}")
+		if (treeLabels.isNotEmpty()) parts.add("B: ${treeLabels.joinToString("+")}")
+		binding.inputFab.text = parts.joinToString(" | ")
 	}
 }
