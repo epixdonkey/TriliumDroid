@@ -33,6 +33,7 @@ import eu.fliegendewurst.triliumdroid.activity.main.NavigationItem
 import eu.fliegendewurst.triliumdroid.activity.main.NoteEditItem
 import eu.fliegendewurst.triliumdroid.activity.main.NoteItem
 import eu.fliegendewurst.triliumdroid.activity.main.NoteMapItem
+import eu.fliegendewurst.triliumdroid.activity.main.QuickNoteItem
 import eu.fliegendewurst.triliumdroid.data.Branch
 import eu.fliegendewurst.triliumdroid.data.Note
 import eu.fliegendewurst.triliumdroid.data.NoteId
@@ -63,6 +64,7 @@ import eu.fliegendewurst.triliumdroid.service.Icon
 import eu.fliegendewurst.triliumdroid.service.ProtectedSession
 import eu.fliegendewurst.triliumdroid.sync.ConnectionUtil
 import eu.fliegendewurst.triliumdroid.sync.Sync
+import eu.fliegendewurst.triliumdroid.util.BiometricAuthManager
 import eu.fliegendewurst.triliumdroid.util.CrashReport
 import eu.fliegendewurst.triliumdroid.util.Preferences
 import eu.fliegendewurst.triliumdroid.widget.NoteWidget
@@ -70,6 +72,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.security.KeyStore
 import java.security.cert.CertPathValidatorException
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 import javax.net.ssl.SSLException
 import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.SSLPeerUnverifiedException
@@ -83,8 +87,9 @@ import kotlin.io.path.writeBytes
  * Receives user input events and notifies UI about changes.
  */
 class MainController {
-	private companion object {
+	companion object {
 		private const val TAG = "MainController"
+		const val ACTION_QUICK_NOTE = "eu.fliegendewurst.triliumdroid.action.QUICK_NOTE"
 	}
 
 	/**
@@ -96,6 +101,16 @@ class MainController {
 	 * First action to execute, used to implement widgets.
 	 */
 	private var firstAction: HistoryItem? = null
+
+	/**
+	 * Widget action that arrived while the app was locked, executed after authentication.
+	 */
+	private var actionAfterUnlock: HistoryItem? = null
+
+	/**
+	 * Actions available during a restricted quick note session without authentication.
+	 */
+	private val quickNoteAllowedActions = setOf(R.id.action_edit, R.id.action_sync)
 
 	// initial note to show
 	private var firstNote: NoteId? = null
@@ -118,6 +133,19 @@ class MainController {
 	private var timeOnStart = 0L
 
 	/**
+	 * Tracks whether the editor was opened as part of a quick note session.
+	 * Auto-sync is deferred until the user saves or finishes editing this note.
+	 */
+	private var isQuickNoteSession: Boolean = false
+
+	/**
+	 * The note created for the current quick note session, if any.
+	 * If the user leaves the editor without modifying the note, this empty
+	 * stub is deleted again (only ever the stub itself, never any ancestor).
+	 */
+	private var quickNotePendingId: NoteId? = null
+
+	/**
 	 * Called when the app is created, possibly in the background.
 	 */
 	fun onCreate(activity: MainActivity, intent: Intent) {
@@ -125,6 +153,9 @@ class MainController {
 
 		Preferences.init(activity.applicationContext)
 		DB.applicationContext = activity.applicationContext
+		// parse the material icon table off the main thread; lookups load it
+		// on demand if they happen to run before this finishes
+		Thread { eu.fliegendewurst.triliumdroid.service.Icon.ensureMaterialLoaded(activity.applicationContext) }.start()
 		ConfigureFabsDialog.init()
 
 		if (DB.haveDatabase(activity)) {
@@ -141,14 +172,25 @@ class MainController {
 			widgetUsed(activity, appWidgetId)
 		}
 
+		if (intent.action == ACTION_QUICK_NOTE) {
+			firstAction = QuickNoteItem()
+		}
+
 		if (intent.action == Intent.ACTION_SEND) {
-			if (intent.type == "text/plain" || intent.type == "text/html") {
-				val text = intent.getStringExtra(Intent.EXTRA_TEXT)
-				if (text != null) {
-					runBlocking { textShared(activity, text) }
-				}
+			if (intent.type?.startsWith("text/") == true) {
+				runBlocking { textShared(activity, intent) }
 			}
 			activity.finish()
+		}
+	}
+
+	fun onNewIntent(activity: MainActivity, intent: Intent) {
+		if (intent.action == Intent.ACTION_SEND) {
+			if (intent.type?.startsWith("text/") == true) {
+				runBlocking { textShared(activity, intent) }
+			}
+		} else if (intent.action == ACTION_QUICK_NOTE) {
+			firstAction = QuickNoteItem()
 		}
 	}
 
@@ -164,6 +206,11 @@ class MainController {
 	 */
 	fun onStart(activity: MainActivity) {
 		timeOnStart = System.currentTimeMillis()
+
+		// cover the content right away, so no note is visible before authentication
+		if (BiometricAuthManager.isLocked() && firstAction !is QuickNoteItem) {
+			activity.setLockOverlayVisible(true)
+		}
 
 		CrashReport.showPendingReports(activity)
 
@@ -209,8 +256,41 @@ class MainController {
 	fun onResume(activity: MainActivity) {
 		active = true
 		val theAction = firstAction
+		firstAction = null
+		if (theAction is QuickNoteItem) {
+			BiometricAuthManager.enterQuickNoteRestrictedSession()
+			activity.setLockOverlayVisible(false)
+			activity.setDrawersLocked(BiometricAuthManager.isQuickNoteRestricted())
+			createQuickNote(activity)
+			return
+		}
+		if (BiometricAuthManager.isLocked() && !BiometricAuthManager.isQuickNoteRestricted()) {
+			actionAfterUnlock = theAction ?: actionAfterUnlock
+			activity.setLockOverlayVisible(true)
+			activity.setDrawersLocked(true)
+			requestUnlock(activity)
+			return
+		}
+		activity.setDrawersLocked(BiometricAuthManager.isQuickNoteRestricted())
+		resumeContent(activity, theAction)
+	}
+
+	/**
+	 * Show the system authentication prompt; on success, the lock screen is removed.
+	 * If the prompt is cancelled, the lock screen stays (with its unlock button).
+	 */
+	fun requestUnlock(activity: MainActivity) {
+		BiometricAuthManager.authenticate(activity, onSuccess = {
+			activity.setLockOverlayVisible(false)
+			activity.setDrawersLocked(false)
+			val pendingAction = actionAfterUnlock
+			actionAfterUnlock = null
+			resumeContent(activity, pendingAction)
+		})
+	}
+
+	private fun resumeContent(activity: MainActivity, theAction: HistoryItem?) {
 		if (theAction != null) {
-			firstAction = null
 			activity.lifecycleScope.launch {
 				Tree.getTreeData("")
 				activity.refreshTree()
@@ -249,8 +329,167 @@ class MainController {
 	}
 
 	fun handleOnBackPressed(activity: MainActivity) {
+		if (activity.isDrawerOpen()) {
+			activity.closeDrawers()
+			return
+		}
+		val frag = if (activity.hasFragment()) activity.getFragment() else null
+		if (frag is NoteEditFragment) {
+			finishEditing(activity, frag)
+			return
+		}
 		if (noteHistory.goBack(activity)) {
 			activity.finish()
+		}
+	}
+
+	/**
+	 * Save the note being edited and leave the editor.
+	 * An empty quick note is deleted again (stub discard); the decision is based
+	 * on the note's actual content, since the editor autosave may flush the text
+	 * before the user leaves (making the `modified` flag unreliable).
+	 * Leaving a quick note session never closes the app on its own: if there is
+	 * nothing to go back to (cold start from the widget), the regular app home
+	 * screen (note tree + initial note) is shown instead. At the end of a
+	 * restricted quick note session, authentication is required to see anything.
+	 */
+	private fun finishEditing(activity: MainActivity, fragment: NoteEditFragment) {
+		val wasQuickNoteSession = isQuickNoteSession || BiometricAuthManager.isQuickNoteRestricted()
+		val pendingQuickNoteId = quickNotePendingId
+		isQuickNoteSession = false
+		quickNotePendingId = null
+		fragment.saveAndFinish { modified ->
+			if (wasQuickNoteSession && pendingQuickNoteId != null) {
+				activity.lifecycleScope.launch {
+					if (!modified || quickNoteStubIsEmpty(pendingQuickNoteId)) {
+						// quick note left empty: discard the stub note
+						discardQuickNote(pendingQuickNoteId)
+						if (BiometricAuthManager.isQuickNoteRestricted() || noteHistory.goBackTwice(activity)) {
+							if (!BiometricAuthManager.isQuickNoteRestricted() &&
+								Preferences.autoSync() && Preferences.syncConfigured()
+							) {
+								// the sync completion (or error handler) rebuilds the tree
+								// and shows the initial note -- triggering our own rebuild as
+								// well would do the expensive full rebuild twice
+								noteHistory.reset()
+								startSync(activity, true)
+							} else {
+								triggerAutoSyncIfEnabled(activity)
+								showAppHome(activity)
+							}
+						} else {
+							// warm session: tree is already correct, just push the deletion
+							triggerAutoSyncIfEnabled(activity)
+						}
+					} else {
+						// quick note with content (saved now or flushed by the editor
+						// autosave earlier): when auto-sync runs, its completion
+						// rebuilds the tree -- otherwise rebuild it right away
+						Tree.markFullRebuildPending()
+						if (!triggerAutoSyncIfEnabled(activity)) {
+							Tree.getTreeData("")
+							activity.refreshTree()
+						}
+						finishEditingNavigateBack(activity, wasQuickNoteSession)
+					}
+				}
+				return@saveAndFinish
+			}
+
+			if (modified) {
+				activity.lifecycleScope.launch {
+					Tree.markFullRebuildPending()
+					if (!triggerAutoSyncIfEnabled(activity)) {
+						Tree.getTreeData("")
+						activity.refreshTree()
+					}
+				}
+			}
+
+			finishEditingNavigateBack(activity, wasQuickNoteSession)
+		}
+	}
+
+	/**
+	 * Authentication (in a restricted quick note session) and history navigation
+	 * after leaving the editor.
+	 */
+	private fun finishEditingNavigateBack(activity: MainActivity, wasQuickNoteSession: Boolean) {
+		if (BiometricAuthManager.isQuickNoteRestricted()) {
+			BiometricAuthManager.authenticate(activity, onSuccess = {
+				activity.setDrawersLocked(false)
+				if (noteHistory.goBack(activity)) {
+					showAppHome(activity)
+				}
+			}, onCancelOrError = {
+				activity.finish()
+			})
+			return
+		}
+
+		if (noteHistory.goBack(activity)) {
+			if (wasQuickNoteSession) {
+				showAppHome(activity)
+			} else {
+				activity.finish()
+			}
+		}
+	}
+
+	/**
+	 * Whether the quick note stub still has no user-visible content.
+	 * The CKEditor empty document ("<p><br></p>") counts as empty as well.
+	 */
+	private suspend fun quickNoteStubIsEmpty(noteId: NoteId): Boolean {
+		val note = Notes.getNoteWithContent(noteId) ?: return true
+		val content = note.content()?.decodeToString() ?: return true
+		return content.isBlank() || content.replace(Regex("<[^>]*>"), "").isBlank()
+	}
+
+	/**
+	 * Land on the regular app home screen (note tree + initial note), asking for
+	 * authentication first if the app is locked. Used when leaving a quick note
+	 * session that has nothing to go back to.
+	 */
+	private fun showAppHome(activity: MainActivity) {
+		if (BiometricAuthManager.isLocked()) {
+			activity.setLockOverlayVisible(true)
+			activity.setDrawersLocked(true)
+			BiometricAuthManager.authenticate(activity, onSuccess = {
+				activity.setLockOverlayVisible(false)
+				activity.setDrawersLocked(false)
+				showAppHomeUnlocked(activity)
+			}, onCancelOrError = {
+				activity.finish()
+			})
+			return
+		}
+		showAppHomeUnlocked(activity)
+	}
+
+	private fun showAppHomeUnlocked(activity: MainActivity) {
+		noteHistory.reset()
+		activity.lifecycleScope.launch {
+			Tree.getTreeData("")
+			activity.refreshTree()
+			showInitialNote(activity, true)
+		}
+	}
+
+	/**
+	 * Delete the empty stub note of a discarded quick note session.
+	 * Only ever deletes the stub itself (its own branch), never any parent note.
+	 */
+	private suspend fun discardQuickNote(noteId: NoteId) {
+		val stub = Notes.getNote(noteId) ?: return
+		val ownBranch = stub.branches.firstOrNull { it.note == noteId }
+			?: Branches.getNotePath(noteId).firstOrNull { it.note == noteId }
+		if (ownBranch == null) {
+			Log.w(TAG, "quick note stub $noteId has no branch, not discarding")
+			return
+		}
+		if (!Notes.deleteNote(ownBranch)) {
+			Log.w(TAG, "failed to delete quick note stub $noteId")
 		}
 	}
 
@@ -270,7 +509,19 @@ class MainController {
 		active = false
 	}
 
-	fun doMenuAction(activity: MainActivity, actionId: Int): Boolean = when (actionId) {
+	fun doMenuAction(activity: MainActivity, actionId: Int): Boolean {
+		if (BiometricAuthManager.isQuickNoteRestricted() && actionId !in quickNoteAllowedActions) {
+			// any access beyond the quick note requires authentication
+			BiometricAuthManager.authenticate(activity, onSuccess = {
+				activity.setDrawersLocked(false)
+				performMenuAction(activity, actionId)
+			})
+			return true
+		}
+		return performMenuAction(activity, actionId)
+	}
+
+	private fun performMenuAction(activity: MainActivity, actionId: Int): Boolean = when (actionId) {
 		R.id.action_note_metadata -> {
 			activity.openDrawerMetadata()
 			true
@@ -329,9 +580,7 @@ class MainController {
 				}
 
 				is NoteEditFragment -> {
-					if (noteHistory.goBack(activity)) {
-						activity.finish()
-					}
+					finishEditing(activity, fragment)
 				}
 
 				else -> {
@@ -380,6 +629,7 @@ class MainController {
 			}
 
 			val shareIntent = Intent.createChooser(sendIntent, note.title())
+			BiometricAuthManager.allowInternalNavigation()
 			activity.startActivity(shareIntent)
 			true
 		}
@@ -407,7 +657,22 @@ class MainController {
 					Toast.LENGTH_SHORT
 				).show()
 			} else {
-				val path = noteHistory.branch() ?: runBlocking { Branches.getNotePath(note.id)[0] }
+				val isCalendarRoot = runBlocking { note.hasLabel("calendarRoot") }
+				val isYearNote = runBlocking { note.hasLabel("yearNote") }
+				val isMonthNote = runBlocking { note.hasLabel("monthNote") }
+				val isDateNote = runBlocking { note.hasLabel("dateNote") }
+				if (isCalendarRoot || isYearNote || isMonthNote || isDateNote) {
+					Toast.makeText(
+						activity, activity.getString(R.string.toast_cannot_delete_root),
+						Toast.LENGTH_SHORT
+					).show()
+					return@run true
+				}
+				val path = noteHistory.branch()?.takeIf { it.note == note.id }
+					?: runBlocking { Branches.getNotePath(note.id).firstOrNull { it.note == note.id } }
+				if (path == null) {
+					return@run true
+				}
 				AlertDialog.Builder(activity)
 					.setTitle(R.string.title_dialog_delete_note)
 					.setMessage(R.string.text_really_delete)
@@ -422,6 +687,7 @@ class MainController {
 						}
 						navigateTo(activity, runBlocking { Notes.getNote(path.parentNote)!! })
 						activity.refreshTree()
+						triggerAutoSyncIfEnabled(activity)
 					}
 					.setNegativeButton(android.R.string.cancel, null).show()
 			}
@@ -431,6 +697,33 @@ class MainController {
 		R.id.action_sync -> {
 			showSyncError = true
 			startSync(activity, true)
+			true
+		}
+
+		R.id.action_journal -> {
+			journalSelect(activity)
+			true
+		}
+
+		R.id.action_new_note -> {
+			newNote(activity)
+			true
+		}
+
+		R.id.action_new_note_sibling -> {
+			newNoteSibling(activity)
+			true
+		}
+
+		R.id.action_scroll_to_note -> {
+			activity.openDrawerTree()
+			scrollTreeToCurrentNote(activity)
+			true
+		}
+
+		R.id.action_collapse_tree -> {
+			activity.openDrawerTree()
+			collapseOrExpandTree(activity)
 			true
 		}
 
@@ -465,6 +758,7 @@ class MainController {
 		}
 
 		R.id.action_settings -> {
+			BiometricAuthManager.allowInternalNavigation()
 			activity.startActivity(Intent(activity, SetupActivity::class.java))
 			true
 		}
@@ -480,6 +774,7 @@ class MainController {
 		}
 
 		R.id.action_about -> {
+			BiometricAuthManager.allowInternalNavigation()
 			activity.startActivity(Intent(activity, AboutActivity::class.java))
 			true
 		}
@@ -507,6 +802,7 @@ class MainController {
 			val contentToRestore = revision.content()
 			revision.note.updateContent(contentToRestore.content, true)
 			reloadNote(activity)
+			triggerAutoSyncIfEnabled(activity)
 		}
 	}
 
@@ -519,6 +815,7 @@ class MainController {
 			activity.lifecycleScope.launch {
 				NoteRevisions.delete(revision)
 				uiCallback.invoke()
+				triggerAutoSyncIfEnabled(activity)
 			}
 		}
 	}
@@ -543,17 +840,79 @@ class MainController {
 	}
 
 	/**
+	 * Quick note widget: create a child note of today's journal note (or the inbox),
+	 * titled with the current time, and open it in the editor.
+	 */
+	private fun createQuickNote(activity: MainActivity) {
+		isQuickNoteSession = true
+		activity.lifecycleScope.launch {
+			val parentNote = DateNotes.getTodayNote() ?: DateNotes.getInboxNote()
+			val title = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm"))
+			val note = Notes.createChildNote(parentNote, title)
+			quickNotePendingId = note.id
+			// Put NoteItem as the back/parent entry in the navigation stack WITHOUT calling
+			// restore(activity), which would trigger an asynchronous NoteFragment.load()
+			// that races with and overwrites the editor below.
+			// No tree work here: the editor must open instantly. The tree is loaded
+			// when the session ends (see finishEditing / showAppHome).
+			noteHistory.add(NoteItem(note, null))
+			noteHistory.addAndRestore(NoteEditItem(note), activity)
+		}
+	}
+
+	/**
 	 * App received text from another app (share target).
 	 */
-	private suspend fun textShared(context: Context, text: String) {
-		if (DB.haveDatabase(context)) {
-			DB.initializeDatabase(context.applicationContext)
-			val inbox = DateNotes.getInboxNote()
+	suspend fun textShared(activity: MainActivity, intent: Intent) {
+		val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+			?: intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
+			?: return
+		if (DB.haveDatabase(activity)) {
+			DB.initializeDatabase(activity.applicationContext)
+			Tree.getTreeData("")
+			val parentNote = DateNotes.getTodayNote() ?: DateNotes.getInboxNote()
+			val subject = intent.getStringExtra(Intent.EXTRA_SUBJECT)?.takeIf { it.isNotBlank() }
+			val title = subject
+				?: text.lineSequence().firstOrNull { it.isNotBlank() }?.trim()
+				?: "Shared note"
+			val htmlContent = if (intent.type == "text/html") {
+				intent.getStringExtra(Intent.EXTRA_HTML_TEXT) ?: text
+			} else {
+				text.trim().lines().joinToString("") { line ->
+					val escaped = line
+						.replace("&", "&amp;")
+						.replace("<", "&lt;")
+						.replace(">", "&gt;")
+					if (escaped.startsWith("http://") || escaped.startsWith("https://")) {
+						"<p><a href=\"$escaped\">$escaped</a></p>"
+					} else {
+						"<p>$escaped</p>"
+					}
+				}
+			}
 			val note = Notes.createChildNote(
-				inbox,
-				text.lineSequence().first()
+				parentNote,
+				title
 			)
-			Notes.setNoteContent(note.id, text)
+			Notes.setNoteContent(note.id, htmlContent)
+			Tree.getTreeData("")
+			activity.refreshTree()
+			Toast.makeText(activity, activity.getString(R.string.toast_note_shared, title), Toast.LENGTH_SHORT).show()
+			if (Preferences.autoSync() && Preferences.syncConfigured()) {
+				if (active) {
+					triggerAutoSyncIfEnabled(activity)
+				} else {
+					ConnectionUtil.setup(activity, {
+						runBlocking {
+							try {
+								Sync.syncPush()
+							} catch (e: Exception) {
+								Log.w(TAG, "auto-sync push after share failed", e)
+							}
+						}
+					}, {})
+				}
+			}
 		}
 	}
 
@@ -564,12 +923,18 @@ class MainController {
 		if (Preferences.readOnlyMode()) {
 			return
 		}
+		val frag = if (activity.hasFragment()) activity.getFragment() else null
+		if (frag !is NoteEditFragment) {
+			return
+		}
 		val note = activity.getNoteLoaded() ?: return
 		NoteIconDialog.showDialogReturningIcon(activity) {
 			activity.lifecycleScope.launch {
-				val cssClass = Icon.getCssClass(it)!!
+				val cssClass = Icon.getCssClass(it) ?: it
 				Attributes.updateLabel(note, "iconClass", cssClass, false)
+				frag.markExternalModified()
 				activity.refreshTitle(Notes.getNote(note.id))
+				activity.refreshTree()
 			}
 		}
 	}
@@ -581,6 +946,10 @@ class MainController {
 		if (Preferences.readOnlyMode()) {
 			return
 		}
+		val frag = if (activity.hasFragment()) activity.getFragment() else null
+		if (frag !is NoteEditFragment) {
+			return
+		}
 		val note = activity.getNoteLoaded() ?: return
 		if (note.isProtected && !ProtectedSession.isActive()) {
 			return
@@ -588,6 +957,7 @@ class MainController {
 		AskForNameDialog.showDialog(activity, R.string.dialog_rename_note, note.title()) {
 			activity.lifecycleScope.launch {
 				Notes.renameNote(note, it)
+				frag.markExternalModified()
 				activity.refreshTree()
 				activity.refreshTitle(note)
 			}
@@ -627,13 +997,13 @@ class MainController {
 	 */
 	fun journalSelect(activity: MainActivity) {
 		activity.lifecycleScope.launch {
-			// get all valid journal dates
-			val dates = DateNotes.getCalendarDates()
-			if (dates.isEmpty()) {
+			if (DateNotes.getCalendarRoot() == null) {
 				Toast.makeText(activity, R.string.toast_no_journal_found, Toast.LENGTH_LONG)
 					.show()
 				return@launch
 			}
+			// get all existing journal dates to highlight them
+			val dates = DateNotes.getCalendarDates()
 			val now = Calendar.getInstance()
 			val dpd = DatePickerDialog.newInstance(
 				null,
@@ -641,7 +1011,9 @@ class MainController {
 				now.get(Calendar.MONTH),  // Initial month selection
 				now.get(Calendar.DAY_OF_MONTH) // Initial day selection
 			)
-			dpd.selectableDays = dates.toTypedArray()
+			if (dates.isNotEmpty()) {
+				dpd.highlightedDays = dates.toTypedArray()
+			}
 			dpd.onDateSetListener = object : DatePickerDialog.OnDateSetListener {
 				override fun onDateSet(
 					view: DatePickerDialog?,
@@ -653,8 +1025,13 @@ class MainController {
 						day.toString().padStart(2, '0')
 					}"
 					activity.lifecycleScope.launch {
-						val dn = DateNotes.getDayNote(isoDate)!!
-						navigateTo(activity, dn)
+						val dn = DateNotes.getDayNote(isoDate)
+						if (dn != null) {
+							Tree.getTreeData("")
+							navigateTo(activity, dn)
+							activity.refreshTree()
+							triggerAutoSyncIfEnabled(activity)
+						}
 					}
 				}
 			}
@@ -686,6 +1063,67 @@ class MainController {
 		activity.refreshTree()
 	}
 
+	fun scrollTreeToCurrentNote(activity: MainActivity) {
+		val note = activity.getNoteLoaded() ?: return
+		activity.lifecycleScope.launch {
+			val paths = Branches.getNotePaths(note.id)
+			val path = paths?.firstOrNull() ?: Branches.getNotePath(note.id)
+			ensurePathIsExpanded(path)
+			val items = Tree.getTreeList(Branches.NONE_ROOT, 0)
+			activity.tree?.submitList(items) {
+				activity.scrollTreeToNote(note.id)
+			}
+		}
+	}
+
+	fun collapseOrExpandTree(activity: MainActivity) {
+		activity.lifecycleScope.launch {
+			val currentVisible = Tree.getTreeList(Branches.NONE_ROOT, 0)
+			val anyFolderExpanded = currentVisible.any { (branch, _) ->
+				branch.id != Branches.NONE_ROOT &&
+					branch.expanded &&
+					!Notes.notes[branch.note]?.children.isNullOrEmpty()
+			}
+			if (anyFolderExpanded) {
+				Branches.collapseAllBelowRoot()
+				val items = Tree.getTreeList(Branches.NONE_ROOT, 0)
+				activity.tree?.submitList(items) {
+					activity.tree?.notifyDataSetChanged()
+				}
+			} else {
+				val note = activity.getNoteLoaded()
+				if (note != null && note.id != Notes.ROOT) {
+					val paths = Branches.getNotePaths(note.id)
+					val path = paths?.firstOrNull() ?: Branches.getNotePath(note.id)
+					ensurePathIsExpanded(path)
+					val items = Tree.getTreeList(Branches.NONE_ROOT, 0)
+					activity.tree?.submitList(items) {
+						activity.scrollTreeToNote(note.id)
+					}
+				} else {
+					val rootNote = Notes.getNote(Notes.ROOT)
+					rootNote?.children?.forEach { branch ->
+						if (!branch.expanded) {
+							Branches.toggleBranch(branch)
+						}
+					}
+					val items = Tree.getTreeList(Branches.NONE_ROOT, 0)
+					activity.tree?.submitList(items) {
+						activity.tree?.notifyDataSetChanged()
+					}
+				}
+			}
+		}
+	}
+
+	fun triggerAutoSyncIfEnabled(activity: MainActivity): Boolean {
+		if (Preferences.autoSync() && Preferences.syncConfigured()) {
+			startSync(activity, false)
+			return true
+		}
+		return false
+	}
+
 	fun addNotePath(activity: MainActivity) {
 		val loaded = activity.getNoteLoaded() ?: return
 		JumpToNoteDialog.showDialogReturningNote(activity, R.string.dialog_select_note) {
@@ -693,6 +1131,7 @@ class MainController {
 				Branches.cloneNote(it, loaded)
 				Tree.getTreeData("")
 				activity.refreshTree()
+				triggerAutoSyncIfEnabled(activity)
 			}
 		}
 	}
@@ -847,9 +1286,7 @@ class MainController {
 				val note = Notes.getNote(n) ?: return@launch
 				navigateTo(activity, note, note.branches.firstOrNull())
 			} else {
-				val noteId = activity.getNoteFragment().getNoteId() ?: return@launch
-				val note = Notes.getNote(noteId) ?: return@launch
-				navigateTo(activity, note)
+				reloadNote(activity, true)
 			}
 		}
 
@@ -967,7 +1404,17 @@ class MainController {
 						activity.lifecycleScope.launch {
 							activity.indicateSyncDone(it.first, it.second)
 							handleSyncDone()
-							Tree.getTreeData("")
+							val orphanedBranches = Branches.cleanupOrphanedBranches()
+							if (orphanedBranches > 0) {
+								Log.w(TAG, "cleaned up $orphanedBranches orphaned branches after sync")
+							}
+							// rebuild the tree only if the sync actually pulled
+							// changes (or cleaned something up), or a local edit
+							// marked the tree as pending a rebuild -- a push-only
+							// sync with a fresh tree skips the rebuild entirely
+							if (it.first > 0 || orphanedBranches > 0 || Tree.fullRebuildPending) {
+								Tree.getTreeData("")
+							}
 							showInitialNote(activity, resetView)
 							showSyncError = false
 						}
@@ -988,12 +1435,16 @@ class MainController {
 	}
 
 	private fun handleSyncDone() {
-		// Branches: taken care of in getTreeData
-		Notes.clearCache()
+		// Branches and notes: taken care of by Tree.getTreeData, which clears the
+		// note cache inside its lock when rebuilding (the former Notes.clearCache()
+		// call here raced with in-flight tree rebuilds and gutted the tree).
+		// When nothing was pulled, no rebuild happens and no invalidation is needed.
 	}
 
-	fun onDestroy() {
-		DB.closeDatabase()
+	fun onDestroy(isChangingConfigurations: Boolean = false) {
+		if (!isChangingConfigurations) {
+			DB.closeDatabase()
+		}
 		// TODO: check if the activity is about to be re-created
 		noteHistory.reset()
 		firstAction = null

@@ -260,6 +260,9 @@ object Notes {
 			val previous = notes[id]
 			note!!.branches = previous?.branches ?: mutableListOf()
 			note!!.children = previous?.children
+			if (note!!.icon == null) {
+				note!!.icon = previous?.icon
+			}
 			previous?.setLabels(labels)
 			previous?.setRelations(relations)
 			notes[id] = note!!
