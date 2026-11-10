@@ -10,7 +10,10 @@ import eu.fliegendewurst.triliumdroid.database.Branches.branches
 import eu.fliegendewurst.triliumdroid.database.Notes.notes
 import eu.fliegendewurst.triliumdroid.service.Icon
 import eu.fliegendewurst.triliumdroid.service.Util
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -28,7 +31,33 @@ object Tree {
 	 */
 	suspend fun getTreeData(filter: String) {
 		LOCK.withLock {
-			getTreeDataInternal(filter)
+			try {
+				if (!DB.isOpen()) {
+					Log.w(TAG, "getTreeData called but database is not open")
+					return@withLock
+				}
+				var attempts = 0
+				while (true) {
+					attempts++
+					if (getTreeDataInternal(filter)) {
+						return@withLock
+					}
+					// the branch walk aborted part-way (e.g. a CursorWindow failure
+					// while another thread writes to the database) and left a
+					// cleared, partial cache -- retry the full rebuild once
+					if (attempts >= 2 || !DB.isOpen()) {
+						Log.e(TAG, "getTreeData: rebuild aborted twice, giving up (partial tree until the next rebuild)")
+						return@withLock
+					}
+					Log.w(TAG, "getTreeData: branch walk aborted, retrying full rebuild")
+				}
+			} catch (e: CancellationException) {
+				throw e
+			} catch (e: IllegalStateException) {
+				Log.w(TAG, "getTreeData aborted: database pool closed", e)
+			} catch (e: Exception) {
+				Log.e(TAG, "getTreeData failed", e)
+			}
 		}
 	}
 
@@ -50,22 +79,35 @@ object Tree {
 		if (!current.expanded) {
 			return list
 		}
-		for (children in notes[current.note]!!.children.orEmpty()) {
+		// the note may be missing from the cache while a deletion is in progress:
+		// Notes.deleteNote removes the note before Branches.delete removes the branch.
+		// Skip the subtree instead of crashing; the next full rebuild shows the consistent state.
+		val note = notes[current.note] ?: return list
+		for (children in note.children.orEmpty()) {
 			list.addAll(getTreeListInternal(children.id, lvl + 1))
 		}
 		return list
 	}
 
-	private suspend fun getTreeDataInternal(filter: String) = withContext(Dispatchers.IO) {
+	/**
+	 * @return false if the branch walk aborted part-way and the cache is left
+	 * in a partial state that warrants a full retry; true otherwise.
+	 */
+	private suspend fun getTreeDataInternal(filter: String): Boolean = withContext(Dispatchers.IO) {
+		if (!currentCoroutineContext().isActive || !DB.isOpen()) {
+			return@withContext true
+		}
 		val startTime = System.currentTimeMillis()
 		if (filter == "") {
-			// regenerate all!
-			notes.values.forEach {
-				it.branches = mutableListOf<Branch>()
-				it.children = null
-			}
+			// regenerate all! Clearing the map here (inside LOCK) invalidates cached
+			// note contents and titles atomically; concurrent readers simply re-fetch
+			// from the database. This used to be done by Notes.clearCache() called
+			// after sync WITHOUT the lock, which raced with in-flight rebuilds and
+			// gutted the tree (notes missing -> "failed to find root", 1-item tree).
+			notes.clear()
 		}
-		DB.rawQuery(
+		try {
+			DB.rawQuery(
 			"SELECT branchId, " +
 					"branches.noteId, " +
 					"parentNoteId, " +
@@ -85,7 +127,7 @@ object Tree {
 			arrayOf()
 		).use {
 			val clones = mutableListOf<Pair<Pair<NoteId, NoteId>, BranchId>>()
-			while (it.moveToNext()) {
+			while (currentCoroutineContext().isActive && DB.isOpen() && it.moveToNext()) {
 				val branchId = BranchId(it.getString(0))
 				val noteId = NoteId(it.getString(1))
 				val parentNoteId = NoteId(it.getString(2))
@@ -153,6 +195,15 @@ object Tree {
 				}
 			}
 		}
+		} catch (e: IllegalStateException) {
+			Log.w(TAG, "getTreeDataInternal: branch walk aborted (cursor window / pool closed)", e)
+			return@withContext false
+		}
+
+		if (!currentCoroutineContext().isActive || !DB.isOpen()) {
+			return@withContext true
+		}
+
 		val query1 = System.currentTimeMillis() - startTime
 		val query2Start = System.currentTimeMillis()
 		val stats = if (filter == "") {
@@ -160,42 +211,74 @@ object Tree {
 		} else {
 			null
 		}
-		DB.rawQuery(
-			"SELECT notes.noteId, attributes.value " +
-					"FROM attributes " +
-					"INNER JOIN notes USING (noteId) " +
-					"INNER JOIN branches USING (noteId) " +
-					"WHERE notes.isDeleted = 0 AND attributes.isDeleted = 0 " +
-					"AND attributes.name = 'iconClass' AND attributes.type = 'label' $filter",
-			arrayOf()
-		).use {
-			while (it.moveToNext()) {
-				val noteId = NoteId(it.getString(0))
-				val noteIcon = it.getString(1)
-				val note = notes[noteId]
-				if (note == null) {
-					Log.w(
-						TAG,
-						"failed to find note = $noteId, perhaps all its branches are deleted?"
-					)
-					continue
-				}
-				note.icon = noteIcon
-				// gather statistics on note icons of user notes
-				if (stats != null && Util.isRegularId(noteId)) {
-					stats[noteIcon] = stats.getOrDefault(noteIcon, 0) + 1
+		try {
+			DB.rawQuery(
+				"SELECT notes.noteId, tpl.tplIcon " +
+						"FROM attributes " +
+						"INNER JOIN notes USING (noteId) " +
+						"INNER JOIN branches USING (noteId) " +
+						"INNER JOIN (SELECT noteId AS tplNoteId, value AS tplIcon FROM attributes WHERE isDeleted = 0 AND name = 'iconClass' AND type = 'label') tpl ON tpl.tplNoteId = attributes.value " +
+						"WHERE notes.isDeleted = 0 AND attributes.isDeleted = 0 " +
+						"AND attributes.name = 'template' AND attributes.type = 'relation' $filter",
+				arrayOf()
+			).use {
+				while (currentCoroutineContext().isActive && DB.isOpen() && it.moveToNext()) {
+					val noteId = NoteId(it.getString(0))
+					val noteIcon = it.getString(1)
+					notes[noteId]?.icon = noteIcon
 				}
 			}
+		} catch (e: IllegalStateException) {
+			Log.w(TAG, "getTreeDataInternal: database pool closed while loading templates", e)
+			return@withContext true
+		}
+
+		if (!currentCoroutineContext().isActive || !DB.isOpen()) {
+			return@withContext true
+		}
+
+		try {
+			DB.rawQuery(
+				"SELECT notes.noteId, attributes.value " +
+						"FROM attributes " +
+						"INNER JOIN notes USING (noteId) " +
+						"INNER JOIN branches USING (noteId) " +
+						"WHERE notes.isDeleted = 0 AND attributes.isDeleted = 0 " +
+						"AND attributes.name = 'iconClass' AND attributes.type = 'label' $filter",
+				arrayOf()
+			).use {
+				while (currentCoroutineContext().isActive && DB.isOpen() && it.moveToNext()) {
+					val noteId = NoteId(it.getString(0))
+					val noteIcon = it.getString(1)
+					val note = notes[noteId]
+					if (note == null) {
+						Log.w(
+							TAG,
+							"failed to find note = $noteId, perhaps all its branches are deleted?"
+						)
+						continue
+					}
+					note.icon = noteIcon
+					// gather statistics on note icons of user notes
+					if (stats != null && Util.isRegularId(noteId)) {
+						stats[noteIcon] = stats.getOrDefault(noteIcon, 0) + 1
+					}
+				}
+			}
+		} catch (e: IllegalStateException) {
+			Log.w(TAG, "getTreeDataInternal: database pool closed while loading icons", e)
+			return@withContext true
 		}
 		if (stats != null) {
 			Icon.iconStatistics =
 				stats.entries.sortedWith(Comparator.comparingInt<MutableMap.MutableEntry<String, Int>?> { -it.value }
 					.thenComparing { it -> it.key })
-					.map { Pair(Icon.getUnicodeCharacter(it.key), it.value) }
+					.map { Pair(it.key, it.value) }
 		}
 		val query2 = System.currentTimeMillis() - query2Start
 		if (query1 + query2 > 50) {
 			Log.w(TAG, "slow getTreeData() $query1 ms + $query2 ms")
 		}
+		true
 	}
 }
