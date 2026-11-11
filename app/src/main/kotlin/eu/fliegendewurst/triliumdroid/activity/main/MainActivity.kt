@@ -30,6 +30,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.view.GravityCompat
+import androidx.drawerlayout.widget.DrawerLayout
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import androidx.navigation.fragment.NavHostFragment
@@ -77,6 +78,7 @@ import eu.fliegendewurst.triliumdroid.fragment.note.NoteFragment
 import eu.fliegendewurst.triliumdroid.service.Icon
 import eu.fliegendewurst.triliumdroid.service.ProtectedSession
 import eu.fliegendewurst.triliumdroid.util.Assets
+import eu.fliegendewurst.triliumdroid.util.BiometricAuthManager
 import eu.fliegendewurst.triliumdroid.util.ListAdapter
 import eu.fliegendewurst.triliumdroid.util.Preferences
 import eu.fliegendewurst.triliumdroid.view.ListViewAutoExpand
@@ -100,6 +102,9 @@ class MainActivity : AppCompatActivity() {
 
 	private var hideLeftFAB = false
 	private var hideRightFAB = false
+	private var fabsHidden = true
+	private val leftFabs = mutableListOf<com.google.android.material.floatingactionbutton.FloatingActionButton>()
+	private val rightFabs = mutableListOf<com.google.android.material.floatingactionbutton.FloatingActionButton>()
 
 	var tree: TreeItemAdapter? = null
 
@@ -117,6 +122,12 @@ class MainActivity : AppCompatActivity() {
 			) == PackageManager.PERMISSION_GRANTED
 		}
 		return true
+	}
+
+	override fun onNewIntent(intent: android.content.Intent) {
+		super.onNewIntent(intent)
+		setIntent(intent)
+		controller.onNewIntent(this, intent)
 	}
 
 	override fun onCreate(savedInstanceState: Bundle?) {
@@ -139,12 +150,15 @@ class MainActivity : AppCompatActivity() {
 		binding.toolbarTitle.setOnClickListener {
 			controller.titleClicked(this)
 		}
+		binding.buttonBiometricUnlock.setOnClickListener {
+			controller.requestUnlock(this)
+		}
 
 		tree = TreeItemAdapter({
 			controller.noteTreeClicked(this, it)
 		}, {
 			controller.noteTreeClickedLong(this, it)
-		})
+		}, true)
 
 		binding.pager.adapter = object : FragmentStateAdapter(this) {
 			override fun getItemCount(): Int {
@@ -155,58 +169,13 @@ class MainActivity : AppCompatActivity() {
 				if (position == 0) {
 					val frag = NoteTreeFragment()
 					frag.initLater {
-						it.binding.treeList.adapter = tree
-						it.binding.buttonNewNote.setOnClickListener {
-							controller.newNote(this@MainActivity)
-						}
-						it.binding.buttonNewNoteSibling.setOnClickListener {
-							controller.newNoteSibling(this@MainActivity)
-						}
-						it.binding.buttonJournal.setOnClickListener {
-							controller.journalSelect(this@MainActivity)
-						}
-						for (buttonId in Preferences.prefs.all.keys.filter { pref ->
-							pref.startsWith(
-								"button"
-							)
-						}) {
-							val view = LayoutInflater.from(this@MainActivity)
-								.inflate(R.layout.button, it.binding.buttons, true)
-							view.findViewById<ImageButton>(R.id.button_custom).setOnClickListener {
-								val script = Preferences.prefs.getString(buttonId, "() => {}")
-								Log.i(TAG, "executing button script $script")
-								runScript(getNoteFragment(), "($script)()")
-							}
-						}
+						initNoteTreeTab(it)
 					}
 					return frag
 				} else if (position == 1) {
 					val frag = NoteTreeFragment()
 					frag.initLater {
-						it.binding.treeList.visibility = View.GONE
-						it.binding.treeListSimple.visibility = View.VISIBLE
-						it.binding.treeListSimple.adapter =
-							ListAdapter(listOf(getString(R.string.action_note_map))) { type, convertView ->
-								var vi = convertView
-								if (vi == null) {
-									vi = layoutInflater.inflate(
-										R.layout.item_tree_note,
-										it.binding.treeListSimple,
-										false
-									)
-								}
-								vi!!.findViewById<TextView>(R.id.note_icon).text =
-									Icon.getUnicodeCharacter("bx bx-map-alt")
-								val button = vi.findViewById<Button>(R.id.label)
-								button.text = type
-								button.setOnClickListener {
-									if (type == getString(R.string.action_note_map)) {
-										controller.globalNoteMap(this@MainActivity)
-									}
-								}
-								return@ListAdapter vi
-							}
-						it.binding.buttons.visibility = View.GONE
+						initSpecialTreeTab(it)
 					}
 					return frag
 				}
@@ -277,19 +246,159 @@ class MainActivity : AppCompatActivity() {
 		})
 	}
 
+	fun initNoteTreeTab(it: NoteTreeFragment) {
+		it.binding.treeList.adapter = tree
+		it.binding.buttons.removeAllViews()
+		val density = resources.displayMetrics.density
+		val sizePx = (44 * density).toInt()
+		val padPx = (9 * density).toInt()
+		val labels = resources.getStringArray(R.array.fabs)
+		val keys = ConfigureFabsDialog.actions.keys.toList()
+		val rippleTypedValue = android.util.TypedValue()
+		theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, rippleTypedValue, true)
+		val fgColor = resources.getColor(R.color.foreground, theme)
+		for (action in ConfigureFabsDialog.getTreeActions()) {
+			val btn = ImageButton(this@MainActivity)
+			val lp = LinearLayout.LayoutParams(sizePx, sizePx)
+			btn.layoutParams = lp
+			btn.setPadding(padPx, padPx, padPx, padPx)
+			btn.setBackgroundResource(rippleTypedValue.resourceId)
+			btn.scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+			btn.setImageResource(ConfigureFabsDialog.getIcon(action))
+			btn.imageTintList = android.content.res.ColorStateList.valueOf(fgColor)
+			val idx = keys.indexOf(action)
+			if (idx >= 0 && idx < labels.size) {
+				btn.contentDescription = labels[idx]
+			}
+			btn.setOnClickListener {
+				if (action == JUMP_TO_NOTE) {
+					binding.drawerLayout.closeDrawers()
+				}
+				performAction(action)
+			}
+			it.binding.buttons.addView(btn)
+		}
+		for (buttonId in Preferences.prefs.all.keys.filter { pref ->
+			pref.startsWith(
+				"button"
+			)
+		}) {
+			val view = LayoutInflater.from(this@MainActivity)
+				.inflate(R.layout.button, it.binding.buttons, true)
+			view.findViewById<ImageButton>(R.id.button_custom).setOnClickListener {
+				val script = Preferences.prefs.getString(buttonId, "() => {}")
+				Log.i(TAG, "executing button script $script")
+				runScript(getNoteFragment(), "($script)()")
+			}
+		}
+	}
+
+	fun initSpecialTreeTab(it: NoteTreeFragment) {
+		it.binding.treeList.visibility = View.GONE
+		it.binding.treeListSimple.visibility = View.VISIBLE
+		it.binding.treeListSimple.adapter =
+			ListAdapter(listOf(getString(R.string.action_note_map))) { type, convertView ->
+				var vi = convertView
+				if (vi == null) {
+					vi = layoutInflater.inflate(
+						R.layout.item_tree_note,
+						it.binding.treeListSimple,
+						false
+					)
+				}
+				vi!!.findViewById<TextView>(R.id.note_icon).text =
+					Icon.getUnicodeCharacter("bx bx-map-alt")
+				val button = vi.findViewById<Button>(R.id.label)
+				button.text = type
+				button.setOnClickListener {
+					if (type == getString(R.string.action_note_map)) {
+						controller.globalNoteMap(this@MainActivity)
+					}
+				}
+				return@ListAdapter vi
+			}
+		it.binding.buttons.visibility = View.GONE
+	}
+
+	private fun rebuildFabs() {
+		val density = resources.displayMetrics.density
+		val marginPx = (6 * density).toInt()
+		val tint = android.content.res.ColorStateList.valueOf(eu.fliegendewurst.triliumdroid.util.ThemeManager.primaryColor())
+		val iconTint = android.content.res.ColorStateList.valueOf(eu.fliegendewurst.triliumdroid.util.ThemeManager.onAccentColor())
+		val shapeModel = com.google.android.material.shape.ShapeAppearanceModel.builder()
+			.setAllCornerSizes(16f * density)
+			.build()
+
+		fun populateContainer(
+			container: LinearLayout,
+			actionsList: List<String>,
+			targetList: MutableList<com.google.android.material.floatingactionbutton.FloatingActionButton>
+		) {
+			container.removeAllViews()
+			targetList.clear()
+			for (action in actionsList) {
+				val btn = com.google.android.material.floatingactionbutton.FloatingActionButton(this)
+				val lp = LinearLayout.LayoutParams(
+					LinearLayout.LayoutParams.WRAP_CONTENT,
+					LinearLayout.LayoutParams.WRAP_CONTENT
+				)
+				lp.setMargins(0, marginPx, 0, marginPx)
+				btn.layoutParams = lp
+				btn.shapeAppearanceModel = shapeModel
+				btn.backgroundTintList = tint
+				btn.imageTintList = iconTint
+				btn.setImageResource(ConfigureFabsDialog.getIcon(action))
+				btn.setOnClickListener {
+					performAction(action)
+				}
+				if (fabsHidden) {
+					btn.hide()
+				} else {
+					btn.show()
+				}
+				container.addView(btn)
+				targetList.add(btn)
+			}
+		}
+
+		val leftActions = ConfigureFabsDialog.getLeftActions()
+		val rightActions = ConfigureFabsDialog.getRightActions()
+		hideLeftFAB = leftActions.isEmpty()
+		hideRightFAB = rightActions.isEmpty()
+		populateContainer(binding.fabContainerLeft, leftActions, leftFabs)
+		populateContainer(binding.fabContainerRight, rightActions, rightFabs)
+	}
+
 	override fun onStart() {
 		super.onStart()
-		val rightAction = ConfigureFabsDialog.getRightAction()
-		if (rightAction != null) {
-			binding.fab.setImageResource(ConfigureFabsDialog.getIcon(rightAction))
-		}
-		hideRightFAB = rightAction == null
-		val leftAction = ConfigureFabsDialog.getLeftAction()
-		if (leftAction != null) {
-			binding.fabTree.setImageResource(ConfigureFabsDialog.getIcon(leftAction))
-		}
-		hideLeftFAB = leftAction == null
+		eu.fliegendewurst.triliumdroid.util.ThemeManager.applyToToolbar(
+			this,
+			binding.toolbar,
+			binding.toolbarTitle,
+			binding.toolbarIcon
+		)
+		binding.tabLayout.setSelectedTabIndicatorColor(eu.fliegendewurst.triliumdroid.util.ThemeManager.primaryColor())
+		rebuildFabs()
+		getNoteTreeFragment()?.let { initNoteTreeTab(it) }
+		tree?.notifyDataSetChanged()
+		invalidateOptionsMenu()
 		controller.onStart(this)
+		controller.updateSyncDot(this)
+	}
+
+	/**
+	 * Set the sync status dot in the toolbar (see MainController.SyncDotState).
+	 */
+	fun setSyncDot(state: MainController.SyncDotState, pending: Int) {
+		val item = binding.toolbar.menu?.findItem(R.id.sync_status_dot) ?: return
+		item.setIcon(state.icon)
+		item.setTitle(
+			if (state == MainController.SyncDotState.PENDING) {
+				getString(state.label, pending)
+			} else {
+				getString(state.label)
+			}
+		)
 	}
 
 	fun handleEmptyNote() {
@@ -301,43 +410,8 @@ class MainActivity : AppCompatActivity() {
 	 * @param action must be a key in [ConfigureFabsDialog.actions]
 	 */
 	fun performAction(action: String) {
-		when (action) {
-			SHOW_NOTE_TREE -> {
-				controller.doMenuAction(this, R.id.action_show_note_tree)
-			}
-
-			JUMP_TO_NOTE -> {
-				controller.doMenuAction(this, R.id.action_jump_to_note)
-			}
-
-			NOTE_NAVIGATION -> {
-				controller.doMenuAction(this, R.id.action_note_navigation)
-			}
-
-			EDIT_NOTE -> {
-				controller.doMenuAction(this, R.id.action_edit)
-			}
-
-			SHARE_NOTE -> {
-				controller.doMenuAction(this, R.id.action_share)
-			}
-
-			DELETE_NOTE -> {
-				controller.doMenuAction(this, R.id.action_delete)
-			}
-
-			NOTE_METADATA -> {
-				controller.doMenuAction(this, R.id.action_note_metadata)
-			}
-
-			NOTE_MAP -> {
-				controller.doMenuAction(this, R.id.action_note_map)
-			}
-
-			SYNC -> {
-				controller.doMenuAction(this, R.id.action_sync)
-			}
-		}
+		val actionId = ConfigureFabsDialog.actions[action] ?: return
+		controller.doMenuAction(this, actionId)
 	}
 
 	override fun onPause() {
@@ -350,6 +424,30 @@ class MainActivity : AppCompatActivity() {
 		controller.onResume(this)
 	}
 
+	override fun onStop() {
+		super.onStop()
+		BiometricAuthManager.onMainActivityStopped(isChangingConfigurations)
+	}
+
+	/**
+	 * Show or hide the screen covering all content while the biometric lock is active.
+	 */
+	fun setLockOverlayVisible(visible: Boolean) {
+		binding.biometricLockOverlay.visibility = if (visible) View.VISIBLE else View.GONE
+		if (visible) {
+			closeDrawers()
+		}
+	}
+
+	/**
+	 * Prevent (or allow again) opening the side drawers, e.g. during a restricted quick note session.
+	 */
+	fun setDrawersLocked(locked: Boolean) {
+		binding.drawerLayout.setDrawerLockMode(
+			if (locked) DrawerLayout.LOCK_MODE_LOCKED_CLOSED else DrawerLayout.LOCK_MODE_UNLOCKED
+		)
+	}
+
 	fun refreshTree() = lifecycleScope.launch {
 		// Log.w(TAG, "call to refreshTree ", Error())
 		if (tree == null) {
@@ -358,7 +456,13 @@ class MainActivity : AppCompatActivity() {
 		}
 		val items = Tree.getTreeList(Branches.NONE_ROOT, 0)
 		Log.d(TAG, "about to show ${items.size} tree items")
-		tree!!.submitList(items)
+		tree!!.submitList(items) {
+			tree!!.notifyDataSetChanged()
+		}
+	}
+
+	fun triggerAutoSyncIfEnabled() {
+		controller.triggerAutoSyncIfEnabled(this)
 	}
 
 	fun treeIsEmpty() = tree?.currentList?.isEmpty() != false
@@ -401,22 +505,38 @@ class MainActivity : AppCompatActivity() {
 		for (action in ConfigureFabsDialog.actions) {
 			val menuItem = menu.findItem(action.value) ?: continue
 			val pref = ConfigureFabsDialog.getPref(action.key) ?: continue
-			menuItem.isVisible = pref.show
+			menuItem.setIcon(ConfigureFabsDialog.getIcon(action.key))
+			menuItem.setShowAsAction(
+				if (pref.top) MenuItem.SHOW_AS_ACTION_ALWAYS else MenuItem.SHOW_AS_ACTION_NEVER
+			)
+			menuItem.isVisible = pref.top || pref.show
 		}
 		val frag = getFragment()
 		val item = menu.findItem(R.id.action_edit)
-		item.isVisible = !Preferences.readOnlyMode()
+		val editPref = ConfigureFabsDialog.getPref(EDIT_NOTE)
+		item.isVisible = !Preferences.readOnlyMode() && (editPref == null || editPref.top || editPref.show)
 		if (frag is NoteEditFragment) {
 			item?.setIcon(R.drawable.bx_save)
 		} else {
 			item?.setIcon(R.drawable.bx_edit_alt)
 		}
+		eu.fliegendewurst.triliumdroid.util.ThemeManager.tintToolbarMenu(binding.toolbar)
+		controller.updateSyncDot(this)
 		return true
 	}
 
 	override fun onPrepareOptionsMenu(menu: Menu?): Boolean {
 		if (menu == null) {
 			return true
+		}
+		for (action in ConfigureFabsDialog.actions) {
+			val menuItem = menu.findItem(action.value) ?: continue
+			val pref = ConfigureFabsDialog.getPref(action.key) ?: continue
+			menuItem.setIcon(ConfigureFabsDialog.getIcon(action.key))
+			menuItem.setShowAsAction(
+				if (pref.top) MenuItem.SHOW_AS_ACTION_ALWAYS else MenuItem.SHOW_AS_ACTION_NEVER
+			)
+			menuItem.isVisible = pref.top || pref.show
 		}
 		val enterProtectedSession = menu.findItem(R.id.action_enter_protected_session)
 		val leaveProtectedSession = menu.findItem(R.id.action_leave_protected_session)
@@ -426,10 +546,21 @@ class MainActivity : AppCompatActivity() {
 		executeScriptMenuItem = menu.findItem(R.id.action_execute) ?: return true
 		shareMenuItem = menu.findItem(R.id.action_share) ?: return true
 		deleteMenuItem = menu.findItem(R.id.action_delete) ?: return true
+		val sharePref = ConfigureFabsDialog.getPref(SHARE_NOTE)
+		val deletePref = ConfigureFabsDialog.getPref(DELETE_NOTE)
+		val editPref = ConfigureFabsDialog.getPref(EDIT_NOTE)
+		val editItem = menu.findItem(R.id.action_edit)
+		editItem?.isVisible = !Preferences.readOnlyMode() && (editPref == null || editPref.top || editPref.show)
+		if (getFragment() is NoteEditFragment) {
+			editItem?.setIcon(R.drawable.bx_save)
+		} else {
+			editItem?.setIcon(R.drawable.bx_edit_alt)
+		}
 		consoleLogMenuItem?.isVisible = consoleVisible
 		executeScriptMenuItem?.isVisible = executeVisible
-		shareMenuItem?.isVisible = shareVisible
-		deleteMenuItem?.isVisible = deleteVisible
+		shareMenuItem?.isVisible = shareVisible && (sharePref == null || sharePref.top || sharePref.show)
+		deleteMenuItem?.isVisible = deleteVisible && (deletePref == null || deletePref.top || deletePref.show)
+		eu.fliegendewurst.triliumdroid.util.ThemeManager.tintToolbarMenu(binding.toolbar)
 		return true
 	}
 
@@ -438,10 +569,12 @@ class MainActivity : AppCompatActivity() {
 		executeVisible = execute
 		shareVisible = share
 		deleteVisible = !isRoot
+		val sharePref = ConfigureFabsDialog.getPref(SHARE_NOTE)
+		val deletePref = ConfigureFabsDialog.getPref(DELETE_NOTE)
 		consoleLogMenuItem?.isVisible = consoleVisible
 		executeScriptMenuItem?.isVisible = executeVisible
-		shareMenuItem?.isVisible = shareVisible
-		deleteMenuItem?.isVisible = deleteVisible
+		shareMenuItem?.isVisible = shareVisible && (sharePref == null || sharePref.top || sharePref.show)
+		deleteMenuItem?.isVisible = deleteVisible && (deletePref == null || deletePref.top || deletePref.show)
 		if (!consoleLog || !execute || !share || isRoot) {
 			invalidateOptionsMenu()
 		}
@@ -471,16 +604,30 @@ class MainActivity : AppCompatActivity() {
 		binding.drawerLayout.openDrawer(GravityCompat.END)
 	}
 
+	fun isDrawerOpen(): Boolean {
+		return binding.drawerLayout.isDrawerOpen(GravityCompat.START) ||
+			binding.drawerLayout.isDrawerOpen(GravityCompat.END)
+	}
+
+	fun closeDrawers() {
+		binding.drawerLayout.closeDrawers()
+	}
+
+	fun scrollTreeToNote(noteId: NoteId) {
+		scrollTreeTo(noteId)
+	}
+
 	fun fixVisibilityFABs(hideFabs: Boolean) {
+		fabsHidden = hideFabs
 		if (hideFabs) {
-			binding.fabTree.hide()
-			binding.fab.hide()
+			leftFabs.forEach { it.hide() }
+			rightFabs.forEach { it.hide() }
 		} else {
 			if (!hideLeftFAB) {
-				binding.fabTree.show()
+				leftFabs.forEach { it.show() }
 			}
 			if (!hideRightFAB) {
-				binding.fab.show()
+				rightFabs.forEach { it.show() }
 			}
 		}
 	}
@@ -493,6 +640,7 @@ class MainActivity : AppCompatActivity() {
 		} else {
 			item?.setIcon(R.drawable.bx_edit_alt)
 		}
+		eu.fliegendewurst.triliumdroid.util.ThemeManager.tintToolbarMenu(binding.toolbar)
 		if (supportFragmentManager.isStateSaved) {
 			return // early return if activity is being shut down
 		}
@@ -527,14 +675,18 @@ class MainActivity : AppCompatActivity() {
 			Log.i(TAG, "done executing code note!")
 			webview.destroy()
 		}
-		webview.addJavascriptInterface(FrontendBackendApi(noteFrag, this, handler), "api")
 	}
 
 
+	private fun getNoteTreeFragment(): NoteTreeFragment? {
+		return (supportFragmentManager.findFragmentByTag("f0") as? NoteTreeFragment)
+			?: supportFragmentManager.fragments.filterIsInstance<NoteTreeFragment>().firstOrNull()
+	}
+
 	private fun scrollTreeTo(noteId: NoteId) {
-		val frag = supportFragmentManager.findFragmentByTag("f0") ?: return
+		val frag = getNoteTreeFragment() ?: return
 		tree!!.select(noteId, true) {
-			((frag as NoteTreeFragment).binding.treeList.layoutManager!! as LinearLayoutManager).scrollToPositionWithOffset(
+			(frag.binding.treeList.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(
 				it,
 				5
 			)
@@ -542,9 +694,9 @@ class MainActivity : AppCompatActivity() {
 	}
 
 	fun scrollTreeToBranch(branch: Branch) {
-		val frag = supportFragmentManager.findFragmentByTag("f0") ?: return
+		val frag = getNoteTreeFragment() ?: return
 		tree!!.scrollTo(branch) {
-			((frag as NoteTreeFragment).binding.treeList.layoutManager!! as LinearLayoutManager).scrollToPositionWithOffset(
+			(frag.binding.treeList.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(
 				it,
 				5
 			)
@@ -560,8 +712,11 @@ class MainActivity : AppCompatActivity() {
 
 	fun refreshTitle(note: Note?) {
 		binding.toolbarTitle.text = note?.title() ?: "(nothing loaded)"
+		val iconClass = note?.icon() ?: "bx bx-file-blank"
+		val isMat = Icon.isMaterialIcon(iconClass)
+		binding.toolbarIcon.typeface = if (isMat) Icon.getMaterialTypeface(this) else Icon.getBoxiconsTypeface(this)
 		binding.toolbarIcon.text =
-			Icon.getUnicodeCharacter(note?.icon() ?: "bx bx-file-blank") ?: "\ueac6"
+			Icon.getUnicodeCharacter(iconClass, this) ?: "\ueac6"
 	}
 
 	fun reloadNote(skipEditors: Boolean = false) {
@@ -569,7 +724,7 @@ class MainActivity : AppCompatActivity() {
 	}
 
 	suspend fun refreshWidgets(noteToShow: Note) {
-		var noteContent = noteToShow
+		var noteContent = eu.fliegendewurst.triliumdroid.service.DateNotes.ensureCalendarTemplateIfNeeded(noteToShow)
 		if (noteContent.invalid()) {
 			noteContent = Notes.getNote(noteToShow.id) ?: return
 		}
@@ -620,6 +775,12 @@ class MainActivity : AppCompatActivity() {
 
 		// relations
 		val relations = noteContent.getRelations()
+		for (rel in relations) {
+			val target = rel.target
+			if (target != null && target.invalid()) {
+				Notes.getNote(target.id)
+			}
+		}
 		val ownedRelations = relations.filter { x -> !x.inherited && !x.templated }
 		val ownedRelationsList = findViewById<ListView>(R.id.widget_owned_relations_type_content)
 		ownedRelationsList.adapter =
@@ -636,7 +797,7 @@ class MainActivity : AppCompatActivity() {
 				}
 				vi!!.findViewById<TextView>(R.id.label_relation_name).text = attribute.name
 				val button = vi!!.findViewById<Button>(R.id.button_relation_target)
-				button.text = attribute.target?.title() ?: "none"
+				button.text = attribute.target?.let { (Notes.notes[it.id] ?: it).title() } ?: "none"
 				button.setOnClickListener {
 					controller.relationTargetClicked(this, attribute)
 				}
@@ -663,7 +824,7 @@ class MainActivity : AppCompatActivity() {
 					}
 					vi!!.findViewById<TextView>(R.id.label_relation_name).text = attribute.name
 					val button = vi!!.findViewById<Button>(R.id.button_relation_target)
-					button.text = attribute.target?.title() ?: "none"
+					button.text = attribute.target?.let { (Notes.notes[it.id] ?: it).title() } ?: "none"
 					button.setOnClickListener {
 						controller.relationTargetClicked(this, attribute)
 					}
@@ -673,7 +834,7 @@ class MainActivity : AppCompatActivity() {
 
 		// note paths
 		val notePaths = findViewById<ListView>(R.id.widget_note_paths_type_content)
-		val paths = Branches.getNotePaths(noteContent.id)!!
+		val paths = Branches.getNotePaths(noteContent.id) ?: emptyList()
 		val currentPath = controller.currentPath()
 		val pathsR = mutableListOf<Pair<String, Branch>>()
 		for (x in paths) {
@@ -681,7 +842,7 @@ class MainActivity : AppCompatActivity() {
 				Pair(
 					x.asReversed()
 						.subList(1, x.size)
-						.map { Notes.getNote(it.note)!!.title() }
+						.map { Notes.getNote(it.note)?.title() ?: "?" }
 						.joinToString(" > "),
 					x.first()
 				)
@@ -789,14 +950,16 @@ class MainActivity : AppCompatActivity() {
 		Preferences.setLastNote(note.id)
 		// make sure note is visible
 		lifecycleScope.launch {
-			val path = Branches.getNotePath(note.id)
+			val paths = Branches.getNotePaths(note.id)
+			val path = paths?.firstOrNull() ?: Branches.getNotePath(note.id)
 			val expandedAny = controller.ensurePathIsExpanded(path)
 			if (expandedAny) {
-				refreshTree()
+				val items = Tree.getTreeList(Branches.NONE_ROOT, 0)
+				tree?.submitList(items)
 			}
 			tree!!.select(note.id)
 			val noteContent = Notes.getNoteWithContent(note.id)
-			if (noteContent == null) {
+			if (noteContent == null || noteContent.deleted) {
 				if (note.id == Notes.ROOT) {
 					Log.e(TAG, "fatal error, missing content for root note")
 					return@launch
@@ -822,12 +985,13 @@ class MainActivity : AppCompatActivity() {
 
 			// update right drawer
 			refreshWidgets(noteContent)
+			refreshTitle(noteContent)
 		}
 	}
 
 	override fun onDestroy() {
 		super.onDestroy()
-		controller.onDestroy()
+		controller.onDestroy(isChangingConfigurations)
 	}
 
 	fun hasFragment() = supportFragmentManager.findFragmentById(R.id.fragment_container) != null

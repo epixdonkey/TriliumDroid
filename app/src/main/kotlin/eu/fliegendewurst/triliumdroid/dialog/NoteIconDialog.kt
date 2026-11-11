@@ -34,16 +34,15 @@ object NoteIconDialog {
 		val screenWidthDp = displayMetrics.widthPixels / displayMetrics.density
 		val cols = ((screenWidthDp * .8F) / 48F).nextDown().toInt()
 
-		val listener = { view: View ->
-			val iconSelected = (view as Button).text
-			dialog.dismiss()
-			callback.invoke(iconSelected.toString())
-		}
-
 		val list = dialog.findViewById<RecyclerView>(R.id.list_all_icons)!!
 		val adapter = ListRecyclerAdapter({ view, x: String ->
+			view.icon.typeface = Icon.getBoxiconsTypeface(view.root.context)
 			view.icon.text = x
-			view.icon.setOnClickListener(listener)
+			view.icon.setOnClickListener {
+				val css = Icon.getCssClass(x) ?: "bx bx-file-blank"
+				dialog.dismiss()
+				callback.invoke(css)
+			}
 		}) { parent ->
 			return@ListRecyclerAdapter ItemNoteIconBinding.inflate(
 				LayoutInflater.from(
@@ -56,9 +55,15 @@ object NoteIconDialog {
 		list.adapter = adapter
 
 		val list2 = dialog.findViewById<RecyclerView>(R.id.list_frequent_icons)!!
-		val adapter2 = ListRecyclerAdapter({ view, x: String ->
-			view.icon.text = x
-			view.icon.setOnClickListener(listener)
+		val adapter2 = ListRecyclerAdapter({ view, iconClass: String ->
+			val isMat = Icon.isMaterialIcon(iconClass)
+			view.icon.typeface = if (isMat) Icon.getMaterialTypeface(view.root.context) else Icon.getBoxiconsTypeface(view.root.context)
+			view.icon.text = Icon.getUnicodeCharacter(iconClass, view.root.context) ?: ""
+			view.icon.setOnClickListener {
+				val css = Icon.getCssClass(iconClass) ?: iconClass
+				dialog.dismiss()
+				callback.invoke(css)
+			}
 		}) { parent ->
 			return@ListRecyclerAdapter ItemNoteIconBinding.inflate(
 				LayoutInflater.from(

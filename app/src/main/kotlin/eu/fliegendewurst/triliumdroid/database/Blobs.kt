@@ -60,7 +60,7 @@ object Blobs {
 		withContext(Dispatchers.IO) {
 			val blobId = calcHash(contentForHash ?: content, contentForHash != null)
 			Log.d(TAG, "creating new blob ${blobId.rawId()}")
-			val existingBlob = load(blobId)
+			val existingBlob = load(blobId, warnOnMissing = false)
 			if (existingBlob != null) {
 				return@withContext existingBlob
 			}
@@ -90,7 +90,7 @@ object Blobs {
 			return@withContext blob
 		}
 
-	suspend fun load(id: BlobId): Blob? = withContext(Dispatchers.IO) {
+	suspend fun load(id: BlobId, warnOnMissing: Boolean = true): Blob? = withContext(Dispatchers.IO) {
 		val it = blobCache[id.id]
 		if (it != null) {
 			return@withContext it
@@ -121,7 +121,13 @@ object Blobs {
 				return@withContext blob
 			}
 		}
-		Log.w(TAG, "cannot find blobId = ${id.id}")
+		// the existence probe from new() is not an error: the blob is about
+		// to be created, so a miss is the expected outcome there
+		if (warnOnMissing) {
+			Log.w(TAG, "cannot find blobId = ${id.id}")
+		} else {
+			Log.d(TAG, "blob $id does not exist yet")
+		}
 		return@withContext null
 	}
 

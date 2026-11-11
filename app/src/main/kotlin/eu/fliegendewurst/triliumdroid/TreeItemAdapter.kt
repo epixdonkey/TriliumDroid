@@ -28,6 +28,7 @@ import java.util.concurrent.ConcurrentHashMap
 class TreeItemAdapter(
 	private val onClick: (Branch) -> Unit,
 	private val onLongClick: (Branch) -> Unit,
+	private val showExpandToggle: Boolean = false
 ) :
 	ListAdapter<Pair<Branch, Int>, TreeItemAdapter.TreeItemViewHolder>(TreeItemDiffCallback) {
 	companion object {
@@ -45,6 +46,10 @@ class TreeItemAdapter(
 	fun getBranchPosition(noteId: NoteId): Set<Int>? = branchPosition[noteId]
 
 	override fun submitList(list: List<Pair<Branch, Int>>?) {
+		submitList(list, null)
+	}
+
+	override fun submitList(list: List<Pair<Branch, Int>>?, commitCallback: Runnable?) {
 		branchPosition.clear()
 		for ((i, pair) in list.orEmpty().withIndex()) {
 			val it = branchPosition[pair.first.note]
@@ -55,27 +60,25 @@ class TreeItemAdapter(
 			}
 			pair.first.cachedTreeIndex = i
 		}
-		super.submitList(list)
-		if (scrollToNote != null) {
-			val pos = getBranchPosition(scrollToNote!!)?.first()
-			scrollToNote = null
-			Log.d(TAG, "(delayed) scrolling to $pos")
-			if (pos == null) {
+		super.submitList(list) {
+			commitCallback?.run()
+			if (scrollToNote != null) {
+				val pos = getBranchPosition(scrollToNote!!)?.firstOrNull()
+				scrollToNote = null
+				Log.d(TAG, "(delayed) scrolling to $pos")
+				if (pos != null) {
+					scrollCallback?.invoke(pos)
+				}
 				scrollCallback = null
-				return
-			}
-			scrollCallback?.invoke(pos)
-			scrollCallback = null
-		} else if (scrollToBranch != null) {
-			val pos = scrollToBranch!!.cachedTreeIndex
-			scrollToBranch = null
-			Log.d(TAG, "(delayed) scrolling to $pos")
-			if (pos == null) {
+			} else if (scrollToBranch != null) {
+				val pos = scrollToBranch!!.cachedTreeIndex
+				scrollToBranch = null
+				Log.d(TAG, "(delayed) scrolling to $pos")
+				if (pos != null) {
+					scrollCallback?.invoke(pos)
+				}
 				scrollCallback = null
-				return
 			}
-			scrollCallback?.invoke(pos)
-			scrollCallback = null
 		}
 	}
 
@@ -89,10 +92,12 @@ class TreeItemAdapter(
 		branchPosition[noteId]?.forEach { notifyItemChanged(it) }
 
 		if (scroll) {
-			val pos = getBranchPosition(noteId)?.first()
+			val pos = getBranchPosition(noteId)?.firstOrNull()
 			Log.d(TAG, "scrolling to $pos")
 			if (pos == null) {
-				Log.e(TAG, "trying to scroll to note with null cachedTreeIndex: $noteId")
+				// expected when the scroll is requested before the list was
+				// submitted; deferred and retried on the next layout pass
+				Log.d(TAG, "tree index of $noteId not cached yet, deferring scroll")
 				scrollToNote = noteId
 				scrollToBranch = null
 				scrollCallback = callbackPosition
@@ -106,7 +111,7 @@ class TreeItemAdapter(
 		val pos = branch.cachedTreeIndex
 		Log.d(TAG, "scrolling to $pos")
 		if (pos == null) {
-			Log.e(TAG, "trying to scroll to branch with null cachedTreeIndex: ${branch.id}")
+			Log.d(TAG, "tree index of ${branch.id} not cached yet, deferring scroll")
 			scrollToNote = null
 			scrollToBranch = branch
 			scrollCallback = callbackPosition
@@ -120,30 +125,58 @@ class TreeItemAdapter(
 		itemView: View,
 		val onClick: (Branch) -> Unit,
 		val onLongClick: (Branch) -> Unit,
+		val showExpandToggle: Boolean
 	) :
 		RecyclerView.ViewHolder(itemView) {
 		fun bind(item: Pair<Branch, Int>) {
 			val note = runBlocking { Notes.getNote(item.first.note) }
+			val hasChildren = showExpandToggle && !note?.children.isNullOrEmpty()
 			val noteIcon = note?.icon()
 			var setNoteIcon = false
 			if (noteIcon != null && noteIcon != "bx bx-file-blank") {
-				binding.noteIcon.text = Icon.getUnicodeCharacter(noteIcon)
-				setNoteIcon = true
+				val isMat = Icon.isMaterialIcon(noteIcon)
+				binding.noteIcon.typeface = if (isMat) Icon.getMaterialTypeface(itemView.context) else Icon.getBoxiconsTypeface(itemView.context)
+				val unicode = Icon.getUnicodeCharacter(noteIcon, itemView.context)
+				if (unicode != null) {
+					binding.noteIcon.text = unicode
+					setNoteIcon = true
+				} else {
+					binding.noteIcon.text = ""
+				}
 			} else {
 				binding.noteIcon.text = ""
 			}
 			binding.label.text = note?.title() ?: item.first.note.rawId()
 			val params = binding.label.layoutParams
 			val params2 = binding.noteIcon.layoutParams
-			if (params is ViewGroup.MarginLayoutParams && params2 is ViewGroup.MarginLayoutParams) {
-				params.leftMargin = item.second * 20
-				if (setNoteIcon) {
-					binding.label.updatePadding(left = itemView.resources.getDimensionPixelOffset(R.dimen.section_margin))
-				} else {
-					// guessed
-					binding.label.updatePadding(left = itemView.resources.getDimensionPixelOffset(R.dimen.normal_margin))
+			val paramsToggle = binding.treeExpandToggle.layoutParams
+			val density = itemView.resources.displayMetrics.density
+			val extraToggleOffset = if (showExpandToggle) (32 * density).toInt() else 0
+			if (hasChildren) {
+				binding.treeExpandToggle.visibility = View.VISIBLE
+				binding.treeExpandToggle.text = if (item.first.expanded) "▾" else "▸"
+				binding.treeExpandToggle.setOnClickListener {
+					onLongClick(item.first)
+					binding.treeExpandToggle.text = if (item.first.expanded) "▾" else "▸"
 				}
-				params2.leftMargin = item.second * 20
+			} else {
+				binding.treeExpandToggle.visibility = View.GONE
+				binding.treeExpandToggle.setOnClickListener(null)
+			}
+			if (params is ViewGroup.MarginLayoutParams && params2 is ViewGroup.MarginLayoutParams && paramsToggle is ViewGroup.MarginLayoutParams) {
+				val indent = (item.second * 12 * density).toInt()
+				paramsToggle.leftMargin = indent
+				binding.treeExpandToggle.layoutParams = paramsToggle
+				params.leftMargin = indent + extraToggleOffset
+				binding.label.layoutParams = params
+				val padLeft = if (setNoteIcon) {
+					itemView.resources.getDimensionPixelOffset(R.dimen.section_margin)
+				} else {
+					itemView.resources.getDimensionPixelOffset(R.dimen.normal_margin)
+				}
+				binding.label.setPadding(padLeft, 0, (10 * density).toInt(), 0)
+				params2.leftMargin = indent + extraToggleOffset
+				binding.noteIcon.layoutParams = params2
 			}
 			binding.label.isLongClickable = true
 			binding.label.setOnClickListener { onClick(item.first) }
@@ -157,37 +190,34 @@ class TreeItemAdapter(
 	override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): TreeItemViewHolder {
 		val binding =
 			ItemTreeNoteBinding.inflate(LayoutInflater.from(parent.context), parent, false)
-		return TreeItemViewHolder(binding, binding.root, onClick, onLongClick)
+		return TreeItemViewHolder(binding, binding.root, onClick, onLongClick, showExpandToggle)
 	}
 
 	override fun onBindViewHolder(holder: TreeItemViewHolder, position: Int) {
 		val item = getItem(position)
-		holder.bind(item)
 		val button = holder.itemView.findViewById<Button>(R.id.label)
 		val icon = holder.itemView.findViewById<TextView>(R.id.note_icon)
-		// make sure entries in the "jump to note" dialog are wide
-		if (item.first.id.rawId() == MainActivity.JUMP_TO_NOTE_ENTRY) {
-			button.layoutParams = FrameLayout.LayoutParams(
-				FrameLayout.LayoutParams.MATCH_PARENT,
-				FrameLayout.LayoutParams.WRAP_CONTENT
-			)
-		}
-		// highlight the selected note
+		val toggle = holder.itemView.findViewById<TextView>(R.id.tree_expand_toggle)
+		val normalColor = holder.itemView.resources.getColor(R.color.tree_normal_text)
+		toggle.setTextColor(normalColor)
+		button.backgroundTintList = null
 		if (item.first.note == selectedNote) {
-			button
-				.backgroundTintList =
-				ContextCompat.getColorStateList(holder.itemView.context, R.color.tree_selected)
-			val c = holder.itemView.resources.getColor(R.color.tree_selected_text)
+			button.background = eu.fliegendewurst.triliumdroid.util.ThemeManager.createTreeItemDrawable(
+				holder.itemView.context,
+				true
+			)
+			val c = eu.fliegendewurst.triliumdroid.util.ThemeManager.onAccentColor()
 			button.setTextColor(c)
 			icon.setTextColor(c)
 		} else {
-			button
-				.backgroundTintList =
-				ContextCompat.getColorStateList(holder.itemView.context, R.color.tree_normal)
-			val c = holder.itemView.resources.getColor(R.color.tree_normal_text)
-			button.setTextColor(c)
-			icon.setTextColor(c)
+			button.background = eu.fliegendewurst.triliumdroid.util.ThemeManager.createTreeItemDrawable(
+				holder.itemView.context,
+				false
+			)
+			button.setTextColor(normalColor)
+			icon.setTextColor(normalColor)
 		}
+		holder.bind(item)
 	}
 
 	object TreeItemDiffCallback : DiffUtil.ItemCallback<Pair<Branch, Int>>() {
@@ -195,20 +225,14 @@ class TreeItemAdapter(
 			oldItem: Pair<Branch, Int>,
 			newItem: Pair<Branch, Int>
 		): Boolean {
-			return oldItem == newItem
+			return oldItem.first.id == newItem.first.id && oldItem.second == newItem.second
 		}
 
 		override fun areContentsTheSame(
 			oldItem: Pair<Branch, Int>,
 			newItem: Pair<Branch, Int>
 		): Boolean {
-			/* TODO: this is where expanded tree items need to be handled
-			if (Cache.branchesDirty.contains(newItem.first.id)) {
-				Cache.branchesDirty.remove(newItem.first.id)
-				return false
-			}
-			 */
-			return oldItem.first.id == newItem.first.id
+			return false
 		}
 	}
 }
