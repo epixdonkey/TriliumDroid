@@ -1,24 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="secondary_light">#FF67d738</color>
-    <color name="secondary">#FF4FA52B</color>
-    <!-- orange:
-    <color name="secondary_light">#ff861c</color>
-    <color name="secondary">#E47B19</color>
-    <color name="secondary_dark">#b25d14</color>
-    -->
-    <color name="primary_light">#FFffed92</color>
-    <color name="primary">#FFffe44c</color>
-    <color name="primary_dark">#FFd7b81e</color>
+    <color name="secondary_light">#FF6366F1</color>
+    <color name="secondary">#FF4F46E5</color>
+    <color name="primary_light">#FF6366F1</color>
+    <color name="primary">#FF4F46E5</color>
+    <color name="primary_dark">#FF4338CA</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
-    <color name="background">@color/white</color>
-    <color name="background2">#FFEEEEEE</color>
-    <color name="background3">#eeeeee</color>
-    <color name="foreground">@color/black</color>
-    <color name="tree_selected">#FFffe44c</color>
-    <color name="tree_selected_text">@color/black</color>
-    <color name="tree_normal_text">@color/foreground</color>
-    <color name="tree_normal">#FFeeeeee</color>
-    <color name="divider_grey">#55808080</color>
+    <color name="background">#FFFFFFFF</color>
+    <color name="background2">#FFF3F5F9</color>
+    <color name="background3">#FFF3F5F9</color>
+    <color name="foreground">#FF14161B</color>
+    <color name="tree_selected">#FF4F46E5</color>
+    <color name="tree_selected_text">#FFFFFFFF</color>
+    <color name="tree_normal_text">#FF1E222A</color>
+    <color name="tree_normal">#00000000</color>
+    <color name="divider_grey">#266E7781</color>
 </resources>
