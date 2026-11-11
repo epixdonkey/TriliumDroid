@@ -6,13 +6,38 @@
 
     <Button
         android:id="@+id/label"
-        android:layout_width="wrap_content"
-        android:layout_height="40dp"
+        android:layout_width="match_parent"
+        android:layout_height="36dp"
+        android:layout_gravity="center_vertical"
+        android:layout_marginEnd="6dp"
+        android:background="@android:color/transparent"
         android:ellipsize="end"
         android:gravity="start|center_vertical"
+        android:minHeight="0dp"
+        android:minWidth="0dp"
+        android:paddingTop="0dp"
+        android:paddingBottom="0dp"
         android:paddingLeft="@dimen/section_margin"
+        android:paddingRight="10dp"
         android:singleLine="true"
+        android:stateListAnimator="@null"
+        android:textAllCaps="false"
         android:textColor="@color/foreground"
+        tools:ignore="RtlHardcoded,RtlSymmetry" />
+
+    <TextView
+        android:id="@+id/tree_expand_toggle"
+        android:layout_width="32dp"
+        android:layout_height="40dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:clickable="true"
+        android:elevation="12dp"
+        android:focusable="true"
+        android:gravity="center"
+        android:textColor="@color/foreground"
+        android:textSize="16sp"
+        android:translationZ="12dp"
+        android:visibility="gone"
         tools:ignore="RtlHardcoded,RtlSymmetry" />
 
     <TextView

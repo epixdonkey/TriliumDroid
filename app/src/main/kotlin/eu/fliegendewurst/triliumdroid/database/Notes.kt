@@ -57,7 +57,12 @@ object Notes {
 		notes.clear()
 	}
 
-	suspend fun createChildNote(parentNote: Note, newNoteTitle: String?): Note {
+	suspend fun createChildNote(
+		parentNote: Note,
+		newNoteTitle: String?,
+		type: String = "text",
+		mime: String = "text/html"
+	): Note {
 		// create entries in notes, blobs, branches
 		var newId = NoteId(DB.newId("notes", "noteId ") { Util.newNoteId() })
 		val dateModified = dateModified()
@@ -69,8 +74,8 @@ object Notes {
 			Pair("noteId", newId),
 			Pair("title", newNoteTitle),
 			Pair("isProtected", false),
-			Pair("type", "text"),
-			Pair("mime", "text/html"),
+			Pair("type", type),
+			Pair("mime", mime),
 			Pair("isDeleted", false),
 			Pair("deleteId", null),
 			Pair("dateCreated", dateModified),
@@ -83,9 +88,9 @@ object Notes {
 		registerEntityChangeNote(
 			Note(
 				newId,
-				"text/html",
+				mime,
 				newNoteTitle ?: "",
-				"text",
+				type,
 				false,
 				null,
 				dateModified,
@@ -260,6 +265,9 @@ object Notes {
 			val previous = notes[id]
 			note!!.branches = previous?.branches ?: mutableListOf()
 			note!!.children = previous?.children
+			if (note!!.icon == null) {
+				note!!.icon = previous?.icon
+			}
 			previous?.setLabels(labels)
 			previous?.setRelations(relations)
 			notes[id] = note!!
@@ -288,6 +296,28 @@ object Notes {
 		}
 		val data = content.encodeToByteArray()
 		if (!notes[id]!!.updateContent(data)) {
+			return@withContext
+		}
+
+		val date = dateModified()
+		val utc = utcDateModified()
+		DB.update(
+			id,
+			Pair("dateModified", date),
+			Pair("utcDateModified", utc),
+			Pair("isProtected", notes[id]!!.isProtected.boolToIntValue()),
+			Pair("blobId", notes[id]!!.blobId.id)
+		)
+		notes[id]!!.modified = date
+		notes[id]!!.utcModified = utc
+		registerEntityChangeNote(notes[id]!!)
+	}
+
+	suspend fun setNoteContentBytes(id: NoteId, content: ByteArray) = withContext(Dispatchers.IO) {
+		if (!notes.containsKey(id)) {
+			getNoteInternal(id)
+		}
+		if (!notes[id]!!.updateContent(content)) {
 			return@withContext
 		}
 

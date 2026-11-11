@@ -22,7 +22,7 @@
     <dimen name="social_logo">40dp</dimen>
     <dimen name="color_sample_size">34dp</dimen>
     <dimen name="shortcut_size">64dp</dimen>
-    <dimen name="drawer_size">250dp</dimen>
+    <dimen name="drawer_size">280dp</dimen>
 
     <dimen name="normal_icon_size">48dp</dimen>
     <dimen name="fingerprint_icon_size">72dp</dimen>

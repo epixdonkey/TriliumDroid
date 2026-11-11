@@ -68,7 +68,38 @@
 
     <item
         android:id="@+id/action_sync"
+        android:icon="@drawable/bx_refresh"
         android:title="@string/action_sync"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_journal"
+        android:icon="@drawable/bx_calendar"
+        android:title="@string/button_journal"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_new_note"
+        android:icon="@drawable/bx_file_blank_child"
+        android:title="@string/button_new_note"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_new_note_sibling"
+        android:icon="@drawable/bx_file_blank_next"
+        android:title="@string/button_new_note_sibling"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_scroll_to_note"
+        android:icon="@drawable/bx_target_lock"
+        android:title="@string/button_scroll_to_note"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_collapse_tree"
+        android:icon="@drawable/bx_collapse_vertical"
+        android:title="@string/button_collapse_tree"
         app:showAsAction="never" />
 
     <item
