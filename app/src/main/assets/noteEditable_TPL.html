@@ -49,6 +49,7 @@
 
     .note-detail-editable-text-editor {
         padding-top: 10px;
+        padding-bottom: 120px;
         border: 0 !important;
         box-shadow: none !important;
         min-height: 50px;
@@ -60,12 +61,20 @@
         top: 0px;
         left: 0px;
         z-index: 10005;
+        background: var(--main-background-color, #ffffff);
     }
 
     @media (prefers-color-scheme: dark) {
         :root {
-            background-color: black;
-            color: white;
+            background-color: #14161B;
+            color: #E6EDF3;
+        }
+        body {
+            background-color: #14161B;
+            color: #E6EDF3;
+        }
+        .classic-toolbar-widget {
+            background: var(--main-background-color, #1E222B);
         }
     }
 </style>

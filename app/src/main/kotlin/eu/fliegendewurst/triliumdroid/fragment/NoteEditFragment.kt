@@ -6,6 +6,7 @@ import android.os.Handler
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import androidx.core.widget.addTextChangedListener
 import androidx.fragment.app.Fragment
 import eu.fliegendewurst.triliumdroid.FrontendBackendApi
 import eu.fliegendewurst.triliumdroid.R
@@ -26,9 +27,19 @@ class NoteEditFragment : Fragment(R.layout.fragment_note_edit), NoteRelatedFragm
 
 	private lateinit var binding: FragmentNoteEditBinding
 	private var id: NoteId? = null
+	private var isCodeNote: Boolean = false
+	private var codeModified: Boolean = false
+	private var externalModified: Boolean = false
+	private var isSaving: Boolean = false
+
+	fun markExternalModified() {
+		externalModified = true
+	}
 
 	fun executeJS(js: String) {
-		binding.webviewEditable.evaluateJavascript(js) { }
+		if (!isCodeNote && ::binding.isInitialized) {
+			binding.webviewEditable.evaluateJavascript(js) { }
+		}
 	}
 
 	fun loadLater(id: NoteId) {
@@ -43,7 +54,8 @@ class NoteEditFragment : Fragment(R.layout.fragment_note_edit), NoteRelatedFragm
 	): View {
 		binding = FragmentNoteEditBinding.inflate(inflater, container, false)
 		id = if (id == null) {
-			val rawId = savedInstanceState?.getString("NODE_ID")
+			val rawId = savedInstanceState?.getString("NOTE_ID")
+				?: savedInstanceState?.getString("NODE_ID")
 			if (rawId != null) {
 				NoteId(rawId)
 			} else {
@@ -52,31 +64,88 @@ class NoteEditFragment : Fragment(R.layout.fragment_note_edit), NoteRelatedFragm
 		} else {
 			id
 		}
-		binding.webviewEditable.settings.javaScriptEnabled = true
-		binding.webviewEditable.addJavascriptInterface(
-			FrontendBackendApi(this, this.requireContext(), Handler(requireContext().mainLooper)),
-			"api"
-		)
-		binding.webviewEditable.webChromeClient = MyWebChromeClient(
-			{ (this@NoteEditFragment.activity as MainActivity?) },
-			{ })
-		binding.webviewEditable.webViewClient = NoteWebViewClient({
-			runBlocking {
-				if (id != null) {
-					Notes.getNote(id!!)
-				} else {
-					null
-				}
+		val note = id?.let { runBlocking { Notes.getNoteWithContent(it) } }
+		isCodeNote = note?.type == "code"
+
+		if (isCodeNote && note != null) {
+			binding.webviewEditable.visibility = View.GONE
+			binding.codeEditorContainer.visibility = View.VISIBLE
+			val initialText = note.content()?.decodeToString() ?: ""
+			binding.codeEditor.setText(initialText)
+			codeModified = false
+			binding.codeEditor.addTextChangedListener {
+				codeModified = true
 			}
-		}, { null }, { null }, { activity as MainActivity? }, { })
-		if (id != null) {
-			binding.webviewEditable.loadUrl("${WEBVIEW_DOMAIN}note-editable#${id!!.id}")
+		} else {
+			binding.codeEditorContainer.visibility = View.GONE
+			binding.webviewEditable.visibility = View.VISIBLE
+			binding.webviewEditable.settings.javaScriptEnabled = true
+			binding.webviewEditable.addJavascriptInterface(
+				FrontendBackendApi(this, this.requireContext(), Handler(requireContext().mainLooper)),
+				"api"
+			)
+			binding.webviewEditable.webChromeClient = MyWebChromeClient(
+				{ (this@NoteEditFragment.activity as MainActivity?) },
+				{ })
+			binding.webviewEditable.webViewClient = NoteWebViewClient({
+				runBlocking {
+					if (id != null) {
+						Notes.getNote(id!!)
+					} else {
+						null
+					}
+				}
+			}, { null }, { null }, { activity as MainActivity? }, { })
+			if (id != null) {
+				binding.webviewEditable.loadUrl("${WEBVIEW_DOMAIN}note-editable#${id!!.id}")
+			}
 		}
 		return binding.root
 	}
 
+	fun saveAndFinish(onDone: (Boolean) -> Unit) {
+		if (!::binding.isInitialized || id == null) {
+			onDone(externalModified)
+			return
+		}
+		if (isSaving) {
+			return
+		}
+		isSaving = true
+		if (isCodeNote) {
+			val modified = codeModified
+			if (modified) {
+				val newText = binding.codeEditor.text.toString()
+				runBlocking {
+					Notes.setNoteContent(id!!, newText)
+				}
+				codeModified = false
+			}
+			isSaving = false
+			onDone(modified || externalModified)
+		} else {
+			binding.webviewEditable.evaluateJavascript("scheduledUpdate()") { result ->
+				isSaving = false
+				val contentModified = result == "true"
+				onDone(contentModified || externalModified)
+			}
+		}
+	}
+
 	override fun onStop() {
-		binding.webviewEditable.evaluateJavascript("scheduledUpdate()") {}
+		if (::binding.isInitialized && id != null && !isSaving) {
+			if (isCodeNote) {
+				if (codeModified) {
+					val newText = binding.codeEditor.text.toString()
+					runBlocking {
+						Notes.setNoteContent(id!!, newText)
+					}
+					codeModified = false
+				}
+			} else {
+				binding.webviewEditable.evaluateJavascript("scheduledUpdate()") {}
+			}
+		}
 		super.onStop()
 	}
 
