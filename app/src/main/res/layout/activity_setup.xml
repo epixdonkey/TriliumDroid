@@ -79,6 +79,19 @@
                 android:text="@string/button_configure_synchronization"
                 tools:ignore="RtlSymmetry" />
 
+            <include layout="@layout/divider" />
+
+            <CheckBox
+                android:id="@+id/checkbox_auto_sync"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/settings_label_start_margin"
+                android:layout_marginTop="@dimen/normal_margin"
+                android:layout_marginEnd="@dimen/settings_label_start_margin"
+                android:layout_marginBottom="@dimen/normal_margin"
+                android:text="@string/auto_sync_mode"
+                android:textSize="@dimen/big_text_size" />
+
             <!--
             <include layout="@layout/divider" />
 
@@ -180,6 +193,19 @@
                 android:layout_marginEnd="@dimen/settings_label_start_margin"
                 android:layout_marginBottom="@dimen/normal_margin"
                 android:text="@string/label_set_ui_theme" />
+
+            <include layout="@layout/divider" />
+
+            <Button
+                android:id="@+id/button_change_accent"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/settings_label_start_margin"
+                android:layout_marginTop="@dimen/normal_margin"
+                android:layout_marginEnd="@dimen/settings_label_start_margin"
+                android:layout_marginBottom="@dimen/normal_margin"
+                android:paddingHorizontal="16dp"
+                android:text="@string/label_set_accent_theme" />
 
             <include layout="@layout/divider" />
 
@@ -375,6 +401,23 @@
                 android:layout_marginEnd="@dimen/settings_label_start_margin"
                 android:layout_marginBottom="@dimen/normal_margin"
                 android:text="@string/read_only_mode"
+                android:textSize="@dimen/big_text_size" />
+
+            <include
+                layout="@layout/divider"
+                android:layout_width="match_parent"
+                android:layout_height="@dimen/divider_height"
+                android:layout_marginBottom="2dp" />
+
+            <CheckBox
+                android:id="@+id/checkbox_biometric_lock"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/settings_label_start_margin"
+                android:layout_marginTop="@dimen/normal_margin"
+                android:layout_marginEnd="@dimen/settings_label_start_margin"
+                android:layout_marginBottom="@dimen/normal_margin"
+                android:text="@string/biometric_lock_mode"
                 android:textSize="@dimen/big_text_size" />
 
             <include

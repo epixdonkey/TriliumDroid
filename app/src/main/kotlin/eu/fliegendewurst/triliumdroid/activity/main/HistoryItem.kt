@@ -34,6 +34,20 @@ class StartItem : HistoryItem() {
 	override fun setBranch(branch: Branch) {}
 }
 
+/**
+ * Launch action of the "quick note" widget: a new child note of today's journal note
+ * is created and opened in the editor (handled by [eu.fliegendewurst.triliumdroid.controller.MainController]).
+ */
+class QuickNoteItem : HistoryItem() {
+	override fun restore(activity: MainActivity): Boolean = true
+
+	override fun noteId() = Notes.ROOT
+
+	override fun branch(): Branch? = null
+
+	override fun setBranch(branch: Branch) {}
+}
+
 class NoteItem(private val note: Note, private var branch: Branch?) : HistoryItem() {
 	override fun restore(activity: MainActivity): Boolean {
 		if (note.id.rawId() == "DELETED") {

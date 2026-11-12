@@ -22,13 +22,20 @@ class NoteTreeFragment : Fragment(R.layout.fragment_note_tree) {
 		savedInstanceState: Bundle?
 	): View {
 		binding = FragmentNoteTreeBinding.inflate(inflater, container, false)
+		val main = activity as? MainActivity
 		if (callbackInit != null) {
 			callbackInit!!.invoke(this)
+		} else if (main != null) {
+			if (tag == "f1") {
+				main.initSpecialTreeTab(this)
+			} else {
+				main.initNoteTreeTab(this)
+			}
 		}
 		if (binding.treeList.adapter != null) {
 			(binding.treeList.adapter as TreeItemAdapter).notifyDataSetChanged()
-		} else {
-			binding.treeList.adapter = (requireActivity() as MainActivity).tree
+		} else if (main != null) {
+			binding.treeList.adapter = main.tree
 		}
 		return binding.root
 	}

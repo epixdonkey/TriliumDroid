@@ -4,17 +4,22 @@ import android.content.ContentValues
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.util.Log
-import eu.fliegendewurst.triliumdroid.data.BranchId
 import eu.fliegendewurst.triliumdroid.database.Cache.Versions
 import eu.fliegendewurst.triliumdroid.database.Cache.utcDateModified
 import eu.fliegendewurst.triliumdroid.database.DB
 import eu.fliegendewurst.triliumdroid.util.Preferences
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import okio.ByteString.Companion.decodeBase64
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -26,7 +31,26 @@ import kotlin.math.roundToInt
 object Sync {
 	private const val TAG = "Sync"
 
-	private suspend fun syncPush(): Int = withContext(Dispatchers.IO) {
+	/**
+	 * Number of syncs currently running (interactive + background pushes).
+	 * The main activity checks this before closing the database, so a push
+	 * still in flight when a share activity finishes cannot have its database
+	 * yanked away mid-request.
+	 */
+	private val inFlight = AtomicInteger(0)
+
+	fun isBusy(): Boolean = inFlight.get() > 0
+
+	suspend fun syncPush(): Int = withContext(Dispatchers.IO) {
+		inFlight.incrementAndGet()
+		try {
+			syncPushInternal()
+		} finally {
+			inFlight.decrementAndGet()
+		}
+	}
+
+	private suspend fun syncPushInternal(): Int = withContext(Dispatchers.IO) {
 		val instanceId = Preferences.instanceId()
 
 		var lastSyncedPush = 0
@@ -36,6 +60,30 @@ object Sync {
 					lastSyncedPush = it.getInt(0)
 				}
 			}
+		// One-time repair for pushes that were acknowledged locally without
+		// waiting for the server (fire-and-forget push bug): roll the cursor
+		// back so the most recent changes are sent again. The server skips
+		// changeIds it has already applied, so re-sending is safe.
+		val repairDone = DB.rawQuery(
+			"SELECT value FROM options WHERE name = ?",
+			arrayOf("pushCursorRepairDone")
+		).use { it.moveToFirst() }
+		if (!repairDone) {
+			val repaired = StrictMath.max(0, lastSyncedPush - 100)
+			Log.w(TAG, "push cursor repair: $lastSyncedPush -> $repaired (re-sending recent changes)")
+			val utc =
+				DateTimeFormatter.ISO_INSTANT.format(OffsetDateTime.now(ZoneOffset.UTC))
+					.replace('T', ' ')
+			DB.internalGetDatabase()!!.execSQL(
+				"INSERT OR REPLACE INTO options (name, value, isSynced, utcDateModified) VALUES (?, ?, 0, ?)",
+				arrayOf("lastSyncedPush", repaired.toString(), utc)
+			)
+			DB.internalGetDatabase()!!.execSQL(
+				"INSERT OR REPLACE INTO options (name, value, isSynced, utcDateModified) VALUES (?, ?, 0, ?)",
+				arrayOf("pushCursorRepairDone", "1", utc)
+			)
+			lastSyncedPush = repaired
+		}
 		Log.i(TAG, "last synced push: $lastSyncedPush")
 		val logMarkerId = "trilium-droid"
 		val changesUri = "/api/sync/update?logMarkerId=$logMarkerId"
@@ -181,14 +229,18 @@ object Sync {
 			Log.d(TAG, "app info: $it")
 			if (it != null) {
 				Preferences.setDatabaseVersion(it.dbVersion)
+				Preferences.setSyncVersion(it.syncVersion)
 				if (Versions.SUPPORTED_SYNC_VERSIONS.contains(it.syncVersion) &&
 					Versions.SUPPORTED_DATABASE_VERSIONS.contains(it.dbVersion)
 				) {
-					runBlocking {
+					CoroutineScope(Dispatchers.IO).launch {
 						sync(0, callbackOutstanding, callbackError, callbackDone)
 					}
 				} else {
-					Log.e(TAG, "mismatched sync / database version")
+					Log.e(
+						TAG,
+						"mismatched sync / database version (remote sync=${it.syncVersion}, remote db=${it.dbVersion}, supported sync=${Versions.SUPPORTED_SYNC_VERSIONS}, supported db=${Versions.SUPPORTED_DATABASE_VERSIONS})"
+					)
 					callbackError(Exception("mismatched sync / database version"))
 				}
 			} else {
@@ -203,47 +255,96 @@ object Sync {
 		callbackError: (Exception) -> Unit,
 		callbackDone: (Pair<Int, Int>) -> Unit
 	): Unit = withContext(Dispatchers.IO) {
+		inFlight.incrementAndGet()
 		try {
-			val totalPushed = syncPush()
+			// pull FIRST, push afterwards: applying remote deletions before
+			// pushing prevents resurrecting notes that were deleted on another
+			// device while this client still had unpushed local changes for
+			// them (the stale row was pushed and re-created the note)
 			var totalSynced = alreadySynced
-			var lastSyncedPull = 0
-			DB.rawQuery("SELECT value FROM options WHERE name = ?", arrayOf("lastSyncedPull"))
-				.use {
-					if (it.moveToFirst()) {
-						// NOTE: TriliumDroid will always save this as an int,
-						// but the user may have imported a TriliumNext database where this is a float
-						lastSyncedPull = it.getFloat(0).roundToInt()
+			var outstandingPullCount = 1
+
+			while (outstandingPullCount > 0 && coroutineContext.isActive) {
+				var lastSyncedPull = 0
+				DB.rawQuery("SELECT value FROM options WHERE name = ?", arrayOf("lastSyncedPull"))
+					.use {
+						if (it.moveToFirst()) {
+							// NOTE: TriliumDroid will always save this as an int,
+							// but the user may have imported a TriliumNext database where this is a float
+							lastSyncedPull = it.getFloat(0).roundToInt()
+						}
+					}
+				val logMarkerId = "trilium-droid"
+				val changesUri =
+					"/api/sync/changed?instanceId=${Preferences.instanceId()}&lastEntityChangeId=${lastSyncedPull}&logMarkerId=${logMarkerId}"
+
+				var resp: JSONObject? = null
+				var lastException: Exception? = null
+				for (attempt in 1..5) {
+					if (!coroutineContext.isActive) break
+					try {
+						resp = ConnectionUtil.doSyncRequestSuspend(changesUri)
+						break
+					} catch (e: IOException) {
+						lastException = e
+						Log.w(TAG, "Sync network error on attempt $attempt/5: ${e.message}. Retrying in 1.5s...")
+						if (attempt < 5) {
+							delay(1500)
+						}
+					} catch (e: Exception) {
+						lastException = e
+						break
 					}
 				}
-			val logMarkerId = "trilium-droid"
-			val changesUri =
-				"/api/sync/changed?instanceId=${Preferences.instanceId()}&lastEntityChangeId=${lastSyncedPull}&logMarkerId=${logMarkerId}"
 
-			ConnectionUtil.doSyncRequest(changesUri, { resp ->
-				runBlocking {
-					val outstandingPullCount = resp.getInt("outstandingPullCount")
-					val entityChangeId = resp.getInt("lastEntityChangeId")
-					Log.i(TAG, "sync outstanding $outstandingPullCount")
-					val changes = resp.getJSONArray("entityChanges")
-					totalSynced += changes.length()
+				if (resp == null) {
+					throw lastException ?: IOException("Failed to fetch sync changes after retries")
+				}
+
+				outstandingPullCount = resp.getInt("outstandingPullCount")
+				val entityChangeId = resp.getInt("lastEntityChangeId")
+				Log.i(TAG, "sync outstanding $outstandingPullCount, lastEntityChangeId $entityChangeId")
+
+				val changes = resp.getJSONArray("entityChanges")
+				totalSynced += changes.length()
+
+				// Apply the whole chunk in a single transaction, so readers never see a
+				// half-applied batch (e.g. a deleted parent note with its branch still
+				// alive). NOTE: between begin and end no suspending DB helpers may be
+				// used -- Android transactions are confined to the thread that opened
+				// them and `DB.*` helpers may resume on another thread.
+				val db = DB.internalGetDatabase()
+				if (db == null || !db.isOpen) {
+					throw IllegalStateException("database closed during sync")
+				}
+				val readOnly = Preferences.readOnlyMode()
+				var cancelled = false
+				db.beginTransactionNonExclusive()
+				try {
 					for (i in 0 until changes.length()) {
+						if (!coroutineContext.isActive) {
+							cancelled = true
+							break
+						}
 						val change = changes.get(i) as JSONObject
 						val entityChange = change.optJSONObject("entityChange")!!
 						val entityName = entityChange.getString("entityName")
 						val changeId = entityChange.getString("changeId")
 						val entity = change.optJSONObject("entity")
 						if (entity == null) {
-							val primaryKey = primaryKeyForTable(entityName)
-							val entityId = entityChange.getString("entityId")
-							// deleted entity
-							DB.delete(entityName, "$primaryKey = ?", arrayOf(entityId))
+							// deleted (erased) entity
+							if (!readOnly) {
+								val primaryKey = primaryKeyForTable(entityName)
+								val entityId = entityChange.getString("entityId")
+								db.delete(entityName, "$primaryKey = ?", arrayOf(entityId))
+							}
 							continue
 						}
-						val alreadyHere = DB.rawQuery(
+						val alreadyHere = db.rawQuery(
 							"SELECT 1 FROM entity_changes WHERE changeId = ?",
 							arrayOf(changeId)
 						).use {
-							return@use it.count != 0
+							it.count != 0
 						}
 						if (alreadyHere) {
 							continue
@@ -251,14 +352,19 @@ object Sync {
 
 						if (entityName == "note_reordering") {
 							for (key in entity.keys()) {
-								DB.update(BranchId(key), Pair("notePosition", entity[key]))
+								val cvReordering = ContentValues(1)
+								when (val positionValue = entity[key]) {
+									is Int -> cvReordering.put("notePosition", positionValue)
+									is Long -> cvReordering.put("notePosition", positionValue)
+									is Double -> cvReordering.put("notePosition", positionValue)
+									is String -> cvReordering.put("notePosition", positionValue)
+									else -> cvReordering.put("notePosition", positionValue.toString())
+								}
+								db.update("branches", cvReordering, "branchId = ?", arrayOf(key))
 							}
 							continue
 						}
 						val keys = entity.keys().asSequence().toList()
-
-						// TODO: invalidate existing cache
-						// TODO: lookup notes related to blob!
 
 						val cv = ContentValues(entity.length())
 						keys.map { fieldName ->
@@ -269,65 +375,58 @@ object Sync {
 								if (fieldName.equals("content") && x is String) {
 									val decoded = x.decodeBase64()
 									if (decoded == null) {
-										callbackError(IllegalStateException("failed to base64-decode content column in sync response"))
-										return@runBlocking
+										throw IllegalStateException("failed to base64-decode content column in sync response")
 									}
 									x = decoded.toByteArray()
 								}
 								when (x) {
-									is String -> {
-										cv.put(fieldName, x)
-									}
-
-									is Int -> {
-										cv.put(fieldName, x)
-									}
-
-									is Double -> {
-										cv.put(fieldName, x)
-									}
-
-									is ByteArray -> {
-										cv.put(fieldName, x)
-									}
-
-									else -> {
-										Log.e(
-											TAG,
-											"failed to recognize sync entity value $x of type ${x.javaClass}"
-										)
-									}
+									is String -> cv.put(fieldName, x)
+									is Int -> cv.put(fieldName, x)
+									is Double -> cv.put(fieldName, x)
+									is ByteArray -> cv.put(fieldName, x)
+									else -> Log.e(TAG, "failed to recognize sync entity value $x of type ${x.javaClass}")
 								}
 							}
 						}
 						// read-only mode: should still receive database updates
-						DB.internalGetDatabase()!!.insertWithOnConflict(
+						db.insertWithOnConflict(
 							entityName,
 							null,
 							cv,
 							SQLiteDatabase.CONFLICT_REPLACE
 						)
 					}
-					Log.i(TAG, "last entity change id: $entityChangeId")
-					val utc = utcDateModified()
-					DB.insertWithConflict(
-						"options",
-						SQLiteDatabase.CONFLICT_REPLACE,
-						Pair("name", "lastSyncedPull"),
-						Pair("value", entityChangeId),
-						Pair("utcDateModified", utc)
-					)
-					if (outstandingPullCount > 0) {
-						callbackOutstanding(outstandingPullCount)
-						sync(totalSynced, callbackOutstanding, callbackError, callbackDone)
-					} else {
-						callbackDone(Pair(totalSynced, totalPushed))
+					if (!cancelled) {
+						// advance the pull cursor only after the chunk was applied completely
+						val utc = utcDateModified()
+						val cvOption = ContentValues(3)
+						cvOption.put("name", "lastSyncedPull")
+						cvOption.put("value", entityChangeId)
+						cvOption.put("utcDateModified", utc)
+						db.insertWithOnConflict("options", null, cvOption, SQLiteDatabase.CONFLICT_REPLACE)
+						db.setTransactionSuccessful()
 					}
+				} finally {
+					db.endTransaction()
 				}
-			}, callbackError)
+
+				if (cancelled) {
+					break
+				}
+
+				if (outstandingPullCount > 0) {
+					callbackOutstanding(outstandingPullCount)
+					delay(50)
+				}
+			}
+
+			val totalPushed = syncPush()
+			callbackDone(Pair(totalSynced, totalPushed))
 		} catch (e: Exception) {
 			Log.e(TAG, "sync error", e)
 			callbackError(e)
+		} finally {
+			inFlight.decrementAndGet()
 		}
 	}
 

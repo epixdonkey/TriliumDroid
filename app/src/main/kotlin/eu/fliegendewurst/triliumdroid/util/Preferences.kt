@@ -34,7 +34,14 @@ object Preferences {
 	private const val DOC_ASSETS_VERSION = "docAssetsVersion"
 	private const val CSS_ASSETS_VERSION = "cssAssetsVersion"
 	private const val READ_ONLY_MODE = "readOnlyMode"
+	private const val AUTO_SYNC = "autoSync"
+	private const val BIOMETRIC_LOCK = "biometricLock"
+	private const val SEARCH_IN_CONTENT = "searchInContent"
 	private const val TEXT_SIZE = "textSize"
+	private const val ACCENT_PRESET = "accentPreset"
+	private const val ACCENT_COLOR_1 = "accentColor1"
+	private const val ACCENT_COLOR_2 = "accentColor2"
+	private const val ACCENT_IS_GRADIENT = "accentIsGradient"
 
 	fun init(applicationContext: Context) {
 		prefs = PreferenceManager.getDefaultSharedPreferences(applicationContext)
@@ -117,6 +124,21 @@ object Preferences {
 	}
 
 	fun readOnlyMode(): Boolean = prefs.getBoolean(READ_ONLY_MODE, false)
+	fun autoSync(): Boolean = prefs.getBoolean(AUTO_SYNC, false)
+	fun biometricLock(): Boolean = prefs.getBoolean(BIOMETRIC_LOCK, false)
+	fun searchInContent(): Boolean = prefs.getBoolean(SEARCH_IN_CONTENT, false)
+
+	fun accentPreset(): String = prefs.getString(ACCENT_PRESET, "obsidian_indigo") ?: "obsidian_indigo"
+	fun accentColor1(): Int = prefs.getInt(ACCENT_COLOR_1, 0xFF4F46E5.toInt())
+	fun accentColor2(): Int = prefs.getInt(ACCENT_COLOR_2, 0xFF7C3AED.toInt())
+	fun accentIsGradient(): Boolean = prefs.getBoolean(ACCENT_IS_GRADIENT, true)
+
+	fun setAccentTheme(preset: String, color1: Int, color2: Int, isGradient: Boolean) = prefs.edit {
+		putString(ACCENT_PRESET, preset)
+		putInt(ACCENT_COLOR_1, color1)
+		putInt(ACCENT_COLOR_2, color2)
+		putBoolean(ACCENT_IS_GRADIENT, isGradient)
+	}
 
 	/**
 	 * @return -1 if not present
@@ -156,6 +178,9 @@ object Preferences {
 	}
 
 	fun setReadOnlyMode(readOnly: Boolean) = prefs.edit { putBoolean(READ_ONLY_MODE, readOnly) }
+	fun setAutoSync(autoSync: Boolean) = prefs.edit { putBoolean(AUTO_SYNC, autoSync) }
+	fun setBiometricLock(enabled: Boolean) = prefs.edit { putBoolean(BIOMETRIC_LOCK, enabled) }
+	fun setSearchInContent(searchInContent: Boolean) = prefs.edit { putBoolean(SEARCH_IN_CONTENT, searchInContent) }
 	fun setTextSize(textSize: Int?) = prefs.edit { putInt(TEXT_SIZE, textSize ?: -1) }
 
 	fun setWebAssetsVersion(version: Int) = prefs.edit { putInt(WEB_ASSETS_VERSION, version) }
