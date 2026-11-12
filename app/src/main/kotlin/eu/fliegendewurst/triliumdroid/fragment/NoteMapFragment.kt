@@ -30,11 +30,22 @@ class NoteMapFragment : Fragment(R.layout.fragment_note_map), NoteRelatedFragmen
 	): View {
 		val binding = FragmentNoteMapBinding.inflate(inflater, container, false)
 		if (noteId != null) {
-			if (noteId!!.rawId() == "GLOBAL") {
-				binding.viewNoteMap.g = createGraphGlobal()
-			} else {
-				binding.viewNoteMap.g = runBlocking { createGraph(Notes.getNote(noteId!!)!!) }
-			}
+			// building the graph walks every note and relation and can take
+			// seconds on large databases -- never do that on the UI thread.
+			// GraphView keeps polling for nodes until the graph appears.
+			val global = noteId!!.rawId() == "GLOBAL"
+			val theNoteId = noteId
+			Thread {
+				val g = if (global) {
+					createGraphGlobal()
+				} else {
+					runBlocking { createGraph(Notes.getNote(theNoteId!!)!!) }
+				}
+				binding.viewNoteMap.post {
+					binding.viewNoteMap.g = g
+					binding.viewNoteMap.invalidate()
+				}
+			}.start()
 		}
 		return binding.root
 	}

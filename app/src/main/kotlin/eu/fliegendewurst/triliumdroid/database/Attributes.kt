@@ -65,7 +65,7 @@ object Attributes {
 					Pair("utcDateModified", utc),
 					Pair("isDeleted", false),
 					Pair("deleteId", null),
-					Pair("isInheritable", false)
+					Pair("isInheritable", inheritable)
 				)
 			}
 			registerEntityChangeAttribute(

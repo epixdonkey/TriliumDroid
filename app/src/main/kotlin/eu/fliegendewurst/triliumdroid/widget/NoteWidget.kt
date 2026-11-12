@@ -24,10 +24,12 @@ import eu.fliegendewurst.triliumdroid.activity.main.HistoryItem
 import eu.fliegendewurst.triliumdroid.activity.main.MainActivity
 import eu.fliegendewurst.triliumdroid.activity.main.NoteEditItem
 import eu.fliegendewurst.triliumdroid.activity.main.NoteItem
+import eu.fliegendewurst.triliumdroid.activity.main.QuickNoteItem
 import eu.fliegendewurst.triliumdroid.activity.main.StartItem
 import eu.fliegendewurst.triliumdroid.data.NoteId
 import eu.fliegendewurst.triliumdroid.database.DB
 import eu.fliegendewurst.triliumdroid.database.Notes
+import eu.fliegendewurst.triliumdroid.dialog.ConfigureWidgetDialog
 import eu.fliegendewurst.triliumdroid.service.Icon
 import eu.fliegendewurst.triliumdroid.util.Preferences
 import kotlinx.coroutines.runBlocking
@@ -99,6 +101,7 @@ fun parseWidgetAction(action: String?): HistoryItem? {
 	}
 	return when (parts[0]) {
 		"launch" -> StartItem()
+		ConfigureWidgetDialog.ACTION_QUICK_NOTE -> QuickNoteItem()
 		"open" -> {
 			if (parts.size >= 2) {
 				val note = runBlocking {
@@ -173,7 +176,22 @@ private suspend fun updateAppWidget(
 	views.setOnClickPendingIntent(R.id.note_content, pendingIntent)
 
 	val action = Preferences.widgetAction(appWidgetId)
-	if (action != null && h == 1) {
+	if (action is QuickNoteItem) {
+		if (w == 1 && h == 1) {
+			views.setImageViewResource(R.id.widget_note_icon, R.drawable.icon_color)
+			views.setViewVisibility(R.id.widget_note_icon, View.VISIBLE)
+			views.setViewVisibility(R.id.widget_note_title, View.GONE)
+		} else {
+			views.setViewVisibility(R.id.widget_note_icon, View.GONE)
+			views.setTextViewText(
+				R.id.widget_note_title,
+				context.getString(R.string.widget_quick_note_label)
+			)
+			views.setViewVisibility(R.id.widget_note_title, View.VISIBLE)
+		}
+		views.setViewVisibility(R.id.appwidget_text, View.GONE)
+		views.setViewVisibility(R.id.note_content, View.GONE)
+	} else if (action != null && h == 1) {
 		val note = Notes.getNote(action.noteId()) ?: return
 		if (w == 1) {
 			val size = TypedValue.applyDimension(
@@ -181,8 +199,10 @@ private suspend fun updateAppWidget(
 				48F,
 				context.resources.displayMetrics
 			)
-			val icon = Icon.getUnicodeCharacter(note.icon()) ?: ""
-			val iconBitmap = renderIcon(context, size, size, icon)
+			val noteIcon = note.icon()
+			val isMat = Icon.isMaterialIcon(noteIcon)
+			val icon = Icon.getUnicodeCharacter(noteIcon, context) ?: ""
+			val iconBitmap = renderIcon(context, size, size, icon, isMat)
 			views.setImageViewBitmap(R.id.widget_note_icon, iconBitmap)
 			views.setViewVisibility(R.id.widget_note_icon, View.VISIBLE)
 			views.setViewVisibility(R.id.widget_note_title, View.GONE)
@@ -218,11 +238,11 @@ private suspend fun updateAppWidget(
 	appWidgetManager.updateAppWidget(appWidgetId, views)
 }
 
-fun renderIcon(context: Context, width: Float, height: Float, icon: String): Bitmap {
+fun renderIcon(context: Context, width: Float, height: Float, icon: String, isMaterial: Boolean = false): Bitmap {
 	val myBitmap = createBitmap(width.roundToInt(), height.roundToInt())
 	val myCanvas = Canvas(myBitmap)
 	val paint = Paint()
-	val typeface = ResourcesCompat.getFont(context, R.font.boxicons)
+	val typeface = if (isMaterial) Icon.getMaterialTypeface(context) else Icon.getBoxiconsTypeface(context)
 	paint.isAntiAlias = true
 	paint.isSubpixelText = true
 	paint.setTypeface(typeface)

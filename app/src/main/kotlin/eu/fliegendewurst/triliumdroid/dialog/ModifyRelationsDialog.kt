@@ -175,6 +175,7 @@ object ModifyRelationsDialog {
 			}
 			dialog.dismiss()
 			activity.refreshWidgets(currentNote)
+			activity.triggerAutoSyncIfEnabled()
 		}
 	}
 }
