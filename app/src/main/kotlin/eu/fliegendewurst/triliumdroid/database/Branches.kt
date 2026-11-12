@@ -109,7 +109,9 @@ object Branches {
 					newPossibleBranches.add(path)
 					continue
 				}
-				val note = Notes.getNote(path.last().parentNote)!!
+				// parent note may be missing (deleted on another device and already
+				// synced away locally) -- drop the broken path instead of crashing
+				val note = Notes.getNote(path.last().parentNote) ?: continue
 				for (branch in note.branches) {
 					val newPath = path.toMutableList()
 					newPath.add(branch)
@@ -180,6 +182,18 @@ object Branches {
 		branches[branch.id]?.expanded = newValue
 	}
 
+	fun hasExpandedBranchesBelowRoot(): Boolean {
+		return branches.values.any { it.id != NONE_ROOT && it.expanded }
+	}
+
+	suspend fun collapseAllBelowRoot() = withContext(Dispatchers.IO) {
+		DB.internalGetDatabase()?.execSQL("UPDATE branches SET isExpanded = 0 WHERE branchId != 'none_root'")
+		DB.internalGetDatabase()?.execSQL("UPDATE branches SET isExpanded = 1 WHERE branchId = 'none_root'")
+		for ((id, b) in branches) {
+			b.expanded = (id == NONE_ROOT)
+		}
+	}
+
 	suspend fun moveBranch(branch: Branch, newParent: Branch, newPosition: Int) =
 		withContext(Dispatchers.IO) {
 			Log.i(
@@ -224,6 +238,42 @@ object Branches {
 		DB.update(branch.id, Pair("isDeleted", 1), Pair("deleteId", Util.newDeleteId()))
 		registerEntityChangeBranch(branch)
 		branches.remove(branch.id)
+	}
+
+	/**
+	 * Mark branches as deleted whose parent or child note no longer exists locally.
+	 * Such rows can be left behind when a branch deletion change was missed
+	 * (e.g. erased entities on the server, or gaps after a server backup restore).
+	 * The deletions are registered, so the next push converges with the server.
+	 * Must only be called after a completed sync.
+	 */
+	suspend fun cleanupOrphanedBranches(): Int = withContext(Dispatchers.IO) {
+		val orphans = mutableListOf<Branch>()
+		DB.rawQuery(
+			"SELECT branchId, noteId, parentNoteId, notePosition, prefix, isExpanded FROM branches " +
+					"WHERE isDeleted = 0 AND parentNoteId != ? " +
+					"AND (COALESCE((SELECT isDeleted FROM notes WHERE noteId = branches.parentNoteId), 1) != 0 " +
+					"OR COALESCE((SELECT isDeleted FROM notes WHERE noteId = branches.noteId), 1) != 0)",
+			arrayOf(Notes.NONE.id)
+		).use {
+			while (it.moveToNext()) {
+				orphans.add(
+					Branch(
+						BranchId(it.getString(0)),
+						NoteId(it.getString(1)),
+						NoteId(it.getString(2)),
+						it.getInt(3),
+						it.getStringOrNull(4),
+						it.getInt(5) == 1
+					)
+				)
+			}
+		}
+		for (branch in orphans) {
+			Log.w(TAG, "removing orphaned branch ${branch.id} (parent ${branch.parentNote}, note ${branch.note})")
+			delete(branch)
+		}
+		orphans.size
 	}
 }
 

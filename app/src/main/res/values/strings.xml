@@ -58,6 +58,8 @@
     <string name="label_fab_action">Action</string>
     <string name="label_fab_left">L</string>
     <string name="label_fab_right">R</string>
+    <string name="label_fab_top">T</string>
+    <string name="label_fab_tree">B</string>
     <string name="label_fab_toolbar">M</string>
     <string name="label_interface">Interface</string>
     <string name="label_floating_action_buttons">Floating action buttons</string>
@@ -109,7 +111,7 @@
     <string name="status_sync_success">Last sync: %1$s minutes ago</string>
     <string name="action_show_note_tree">Show note tree</string>
     <string name="action_note_navigation">Navigate note tree</string>
-    <string name="fab_setup_hint">L = Left action, R = right action, M = toolbar action</string>
+    <string name="fab_setup_hint">L = Left FABs, R = Right FABs, T = Top bar, B = Tree bottom bar, M = Menu (3 dots)</string>
     <string name="error_generic">An error occurred whilst trying to synchronize the database.</string>
     <string name="error_connect">The app could not connect to the sync server.</string>
     <string name="error_unknown_host">The hostname of the sync server could not be resolved.</string>
@@ -127,6 +129,7 @@
     <string name="button_configure_synchronization">Configure synchronization</string>
     <string name="label_set_ui_language">Set UI language</string>
     <string name="label_set_ui_theme">Set UI theme (day/night)</string>
+    <string name="label_set_accent_theme">Accent color / gradient</string>
     <string name="label_set_text_size">Set text size</string>
     <string name="theme_day">Day / Light</string>
     <string name="theme_night">Night / Dark</string>
@@ -177,9 +180,34 @@
     <string name="action_note_metadata">Note metadata</string>
     <string name="toast_ssl_certificate">Restart sync to accept new certificate</string>
     <string name="button_journal">Select journal date</string>
+    <string name="button_jump_to_note">Jump to note</string>
+    <string name="button_scroll_to_note">Scroll to active note</string>
+    <string name="button_collapse_tree">Collapse / Expand tree</string>
+    <string name="auto_sync_mode">Auto-sync after changes</string>
+    <string name="search_in_content">Search in note content</string>
+    <string name="toast_error_saving_image">Could not save the shared image</string>
+    <string name="toast_image_too_large">Image too large (over 16 MB)</string>
+    <string name="toast_note_shared">Saved note: %1$s</string>
+    <string name="sync_status_desc">Sync status</string>
+    <string name="action_note_map_global">Note map (whole vault)</string>
+    <string name="map_building">Building the map…</string>
+    <string name="sync_status_synced">All changes synchronized</string>
+    <string name="sync_status_pending">%1$d change(s) waiting to sync</string>
+    <string name="sync_status_error">Last sync attempt failed — changes not yet on the server</string>
+    <string name="sync_status_unconfigured">Sync is not configured</string>
+    <string name="hint_note_title">Note title</string>
     <string name="toast_no_journal_found">No journal found!</string>
     <string name="app_version">App version:</string>
-    <!-- FAB IDs: showNoteTree", "jumpToNote", "noteNavigation", "editNote", "shareNote", "deleteNote", "noteMap", "sync" -->
+    <string name="biometric_lock_mode">Unlock with fingerprint / screen lock</string>
+    <string name="biometric_prompt_title">Unlock Trilium Notes</string>
+    <string name="biometric_prompt_subtitle">Authenticate to access your notes</string>
+    <string name="biometric_unavailable">No screen lock or fingerprint configured on this device</string>
+    <string name="biometric_locked_label">Trilium Notes is locked</string>
+    <string name="biometric_unlock_button">Unlock</string>
+    <string name="widget_action_quick_note">Quick note in today\'s journal</string>
+    <string name="widget_quick_note_label">Quick note</string>
+    <string name="widget_quick_note_description">Instantly create a new note in today\'s journal</string>
+    <!-- FAB IDs: showNoteTree", "jumpToNote", "noteNavigation", "editNote", "shareNote", "deleteNote", "noteMap", "noteMetadata", "sync", "journal", "newNote", "newNoteSibling", "scrollToNote", "collapseTree" -->
     <string-array name="fabs">
         <item>@string/action_show_note_tree</item>
         <item>@string/jump_to_dialog</item>
@@ -190,6 +218,11 @@
         <item>@string/action_local_note_map</item>
         <item>@string/action_note_metadata</item>
         <item>@string/action_sync</item>
+        <item>@string/button_journal</item>
+        <item>@string/button_new_note</item>
+        <item>@string/button_new_note_sibling</item>
+        <item>@string/button_scroll_to_note</item>
+        <item>@string/button_collapse_tree</item>
     </string-array>
     <string-array name="note_types_array">
         <item>Text</item>
@@ -199,5 +232,6 @@
     <string-array name="widget_actions_array">
         <item>@string/widget_action_edit</item>
         <item>@string/open_note</item>
+        <item>@string/widget_action_quick_note</item>
     </string-array>
 </resources>

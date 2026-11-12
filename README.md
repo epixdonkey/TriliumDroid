@@ -1,3 +1,69 @@
+# TriliumDroid — custom fork
+
+Unofficial Android port of [Trilium Notes](https://github.com/TriliumNext/Trilium),
+based on [FliegendeWurst/TriliumDroid](https://github.com/FliegendeWurst/TriliumDroid).
+
+This fork adds personal quality-of-life features on top of upstream and tracks
+compatibility with current TriliumNext servers. See **[CHANGELOG.md](./CHANGELOG.md)**
+for the complete list of changes.
+
+> **Fork highlights**
+> - Unlocked calendar: every day is selectable, empty days are created on demand
+>   with proper `#yearNote` / `#monthNote` / `#dateNote` labels
+> - Share-to-journal: text shared from other apps lands as a child of today's
+>   calendar note instead of the inbox
+> - Standalone quick-note home screen widget, with instant editor opening and
+>   clean discard of empty notes
+> - Biometric app lock (fingerprint / device credential)
+> - Customizable accent colors and gradient theme engine
+> - Material Symbols icon pack for notes (in addition to boxicons)
+> - Synchronization with TriliumNext v0.107.0 (sync version 41, database version 242)
+> - Hardened sync: pull chunks are applied in single SQLite transactions, automatic
+>   retries on dropped connections, self-healing consistency pass after every sync
+
+## Building from source
+
+Any machine with Docker works — no local Android SDK required:
+
+```bash
+mkdir -p ../.android-build-cache/gradle ../.android-build-cache/sdk
+docker run --rm \
+  -v "$PWD:/workspace" \
+  -v "$PWD/../.android-build-cache/gradle:/root/.gradle" \
+  -v "$PWD/../.android-build-cache/sdk:/opt/android-sdk" \
+  -w /workspace eclipse-temurin:21-jdk bash -c '
+set -e
+export ANDROID_HOME=/opt/android-sdk
+export ANDROID_SDK_ROOT=/opt/android-sdk
+if [ ! -f "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+  apt-get update && apt-get install -y unzip curl
+  mkdir -p "$ANDROID_HOME/cmdline-tools"
+  curl -sSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/cmdtools.zip
+  unzip -q /tmp/cmdtools.zip -d "$ANDROID_HOME/cmdline-tools"
+  mv "$ANDROID_HOME/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+  rm /tmp/cmdtools.zip
+fi
+yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+if [ ! -f /tmp/gradle-9.4.1/bin/gradle ]; then
+  curl -sSL https://services.gradle.org/distributions/gradle-9.4.1-bin.zip -o /tmp/gradle.zip
+  unzip -q /tmp/gradle.zip -d /tmp && rm /tmp/gradle.zip
+fi
+/tmp/gradle-9.4.1/bin/gradle :app:testDebugUnitTest :app:assembleDebug --no-daemon
+'
+```
+
+The debug APK installs alongside the original app (package id suffix `.debug`)
+and appears in `app/build/outputs/apk/debug/`.
+
+Incorporating upstream changes:
+
+```bash
+git fetch upstream
+git rebase upstream/master
+```
+
+---
+
 # Trilium Notes for Android ![test workflow](https://github.com/FliegendeWurst/TriliumDroid/actions/workflows/test.yaml/badge.svg) <a href="https://hosted.weblate.org/engage/triliumdroid/"><img src="https://hosted.weblate.org/widget/triliumdroid/app/svg-badge.svg" alt="translation status" /></a> <a href="https://matrix.to/#/#triliumdroid:matrix.org" title="link to Matrix channel"><img src="https://img.shields.io/matrix/triliumdroid:matrix.org?server_fqdn=matrix.org&label=matrix" /></a>
 
 <img align="right" width="200" src="./fastlane/metadata/android/en-US/images/phoneScreenshots/1.png" />

@@ -134,12 +134,26 @@ object Cache {
 			}
 		}
 
-	suspend fun getJumpToResults(input: String): List<Note> = withContext(Dispatchers.IO) {
+	suspend fun getJumpToResults(input: String, searchContent: Boolean = false): List<Note> = withContext(Dispatchers.IO) {
 		val notes = mutableListOf<Note>()
-		DB.rawQuery(
-			"SELECT noteId, mime, title, type FROM notes WHERE isDeleted = 0 AND title LIKE ? LIMIT 50",
+		val sql = if (searchContent) {
+			"SELECT notes.noteId, notes.mime, notes.title, notes.type " +
+				"FROM notes LEFT JOIN blobs USING (blobId) " +
+				"WHERE notes.isDeleted = 0 AND (" +
+				"notes.title LIKE ? OR (" +
+				"notes.isProtected = 0 AND notes.type IN ('text', 'code') AND CAST(blobs.content AS TEXT) LIKE ?" +
+				")) " +
+				"ORDER BY CASE WHEN notes.title LIKE ? THEN 0 ELSE 1 END, notes.utcDateModified DESC " +
+				"LIMIT 50"
+		} else {
+			"SELECT noteId, mime, title, type FROM notes WHERE isDeleted = 0 AND title LIKE ? LIMIT 50"
+		}
+		val args = if (searchContent) {
+			arrayOf("%$input%", "%$input%", "%$input%")
+		} else {
 			arrayOf("%$input%")
-		).use {
+		}
+		DB.rawQuery(sql, args).use {
 			while (it.moveToNext()) {
 				val note = Note(
 					NoteId(it.getString(0)),
@@ -237,6 +251,7 @@ object Cache {
 		val notesById = list.associateBy { x -> x.id }
 		val relationsById = mutableMapOf<NoteId, MutableList<Relation>>()
 		val relationsByIdIncoming = mutableMapOf<NoteId, MutableList<Relation>>()
+		var danglingRelations = 0
 		for (rel in relations) {
 			if (relationsById[rel.first] == null) {
 				relationsById[rel.first] = mutableListOf()
@@ -245,8 +260,9 @@ object Cache {
 				relationsByIdIncoming[rel.second] = mutableListOf()
 			}
 			if (!notesById.containsKey(rel.second)) {
-				// relation points to deleted note??
-				Log.w(TAG, "relation from ${rel.first} to deleted ${rel.second} found")
+				// relation points to a deleted note; common in vaults with a
+				// messy history -- counted and reported once, not per relation
+				danglingRelations++
 				continue
 			}
 			val relation = Relation(
@@ -258,6 +274,9 @@ object Cache {
 			)
 			relationsById[rel.first]!!.add(relation)
 			relationsByIdIncoming[rel.second]!!.add(relation)
+		}
+		if (danglingRelations > 0) {
+			Log.i(TAG, "ignored $danglingRelations relations pointing to deleted notes")
 		}
 		for (v in relationsById) {
 			notesById[v.key]!!.setRelations(v.value)
@@ -356,6 +375,7 @@ object Cache {
 		const val DATABASE_VERSION_0_103_0 = 238
 		const val DATABASE_VERSION_0_104_0 = 239
 		const val DATABASE_VERSION_0_105_0 = 240
+		const val DATABASE_VERSION_0_107_0 = 242
 
 		const val SYNC_VERSION_0_59_4 = 29
 		const val SYNC_VERSION_0_60_4 = 29
@@ -366,24 +386,29 @@ object Cache {
 		const val SYNC_VERSION_0_94_0 = 35 // same up to 0.94.1
 		const val SYNC_VERSION_0_95_0 = 36 // same up to 0.102.1
 		const val SYNC_VERSION_0_103_0 = 39 // same up to 0.105.0
+		const val SYNC_VERSION_0_107_0 = 41
 
 		val SUPPORTED_SYNC_VERSIONS: Set<Int> = setOf(
 			SYNC_VERSION_0_95_0,
-			SYNC_VERSION_0_103_0
+			SYNC_VERSION_0_103_0,
+			40,
+			SYNC_VERSION_0_107_0
 		)
 		val SUPPORTED_DATABASE_VERSIONS: Set<Int> = setOf(
 			DATABASE_VERSION_0_97_0,
 			DATABASE_VERSION_0_102_0,
 			DATABASE_VERSION_0_103_0,
 			DATABASE_VERSION_0_104_0,
-			DATABASE_VERSION_0_105_0
+			DATABASE_VERSION_0_105_0,
+			241,
+			DATABASE_VERSION_0_107_0
 		)
 
-		const val DATABASE_VERSION = DATABASE_VERSION_0_105_0
+		const val DATABASE_VERSION = DATABASE_VERSION_0_107_0
 		const val DATABASE_NAME = "Document.db"
 
 		// sync version is largely irrelevant
-		const val SYNC_VERSION = SYNC_VERSION_0_103_0
+		const val SYNC_VERSION = SYNC_VERSION_0_107_0
 		const val APP_VERSION = BuildConfig.VERSION_NAME
 	}
 }
