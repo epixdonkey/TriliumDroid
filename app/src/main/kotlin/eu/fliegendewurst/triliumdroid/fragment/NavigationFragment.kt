@@ -1,6 +1,6 @@
 package eu.fliegendewurst.triliumdroid.fragment
 
-import android.graphics.Paint
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.util.Log
 import android.view.LayoutInflater
@@ -21,6 +21,7 @@ import eu.fliegendewurst.triliumdroid.databinding.FragmentNavigationBinding
 import eu.fliegendewurst.triliumdroid.databinding.ItemNavigationButtonBinding
 import eu.fliegendewurst.triliumdroid.service.Icon
 import eu.fliegendewurst.triliumdroid.util.ListRecyclerAdapter
+import eu.fliegendewurst.triliumdroid.util.ThemeManager
 import kotlinx.coroutines.runBlocking
 
 
@@ -59,8 +60,15 @@ class NavigationFragment : Fragment(R.layout.fragment_navigation) {
 		binding.navigationList.isNestedScrollingEnabled = false
 		binding.navigationList.itemAnimator = null
 
+		val density = resources.displayMetrics.density
+		val onAccent = ThemeManager.onAccentColor()
 		adapter = ListRecyclerAdapter({ view, x ->
-			view.navigationButtonIcon.text = Icon.getUnicodeCharacter(x.icon)
+			view.clickArea.background = ThemeManager.createGradientDrawable(14f * density)
+			view.navigationButtonIcon.setTextColor(onAccent)
+			view.navigationButtonLabel.setTextColor(onAccent)
+			val isMat = Icon.isMaterialIcon(x.icon)
+			view.navigationButtonIcon.typeface = if (isMat) Icon.getMaterialTypeface(view.root.context) else Icon.getBoxiconsTypeface(view.root.context)
+			view.navigationButtonIcon.text = Icon.getUnicodeCharacter(x.icon, view.root.context)
 			view.navigationButtonLabel.text = x.title
 
 			view.clickArea.setOnClickListener {
@@ -83,7 +91,7 @@ class NavigationFragment : Fragment(R.layout.fragment_navigation) {
 		binding.navigationListBottom.setHasFixedSize(true)
 		binding.navigationListBottom.isNestedScrollingEnabled = false
 		binding.navigationListBottom.itemAnimator = null
-		val bg = resources.getColor(R.color.background, null)
+		val bg = resources.getColor(R.color.background2, null)
 		val fg = resources.getColor(R.color.foreground, null)
 		adapter2 = ListRecyclerAdapter({ view, x ->
 			view.root.layoutParams.width = LinearLayout.LayoutParams.WRAP_CONTENT
@@ -93,20 +101,24 @@ class NavigationFragment : Fragment(R.layout.fragment_navigation) {
 				view.navigationButtonFiller.text = ">"
 			}
 			(view.navigationButtonFiller.layoutParams as LinearLayout.LayoutParams).weight = 0f
-			view.clickArea.setBackgroundColor(bg)
-
-			view.navigationButtonIcon.setTextColor(fg)
-			view.navigationButtonLabel.setTextColor(fg)
-
-			view.navigationButtonIcon.text = Icon.getUnicodeCharacter(x.icon)
-			view.navigationButtonLabel.text = x.title
-			if (x.flags == FLAG_LAST) {
-				view.navigationButtonLabel.paintFlags =
-					view.navigationButtonLabel.paintFlags or Paint.UNDERLINE_TEXT_FLAG
+			// current note: accent colored pill, parent notes: neutral pills
+			val isLast = x.flags == FLAG_LAST
+			view.clickArea.background = if (isLast) {
+				ThemeManager.createGradientDrawable(10f * density)
 			} else {
-				view.navigationButtonLabel.paintFlags =
-					view.navigationButtonLabel.paintFlags and Paint.UNDERLINE_TEXT_FLAG.inv()
+				GradientDrawable().apply {
+					cornerRadius = 10f * density
+					setColor(bg)
+				}
 			}
+			val textColor = if (isLast) onAccent else fg
+			view.navigationButtonIcon.setTextColor(textColor)
+			view.navigationButtonLabel.setTextColor(textColor)
+
+			val isMat = Icon.isMaterialIcon(x.icon)
+			view.navigationButtonIcon.typeface = if (isMat) Icon.getMaterialTypeface(view.root.context) else Icon.getBoxiconsTypeface(view.root.context)
+			view.navigationButtonIcon.text = Icon.getUnicodeCharacter(x.icon, view.root.context)
+			view.navigationButtonLabel.text = x.title
 
 			view.clickArea.setOnClickListener {
 				if (x.flags == FLAG_LAST) {

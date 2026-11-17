@@ -1,48 +1,52 @@
 <!DOCTYPE html>
 <style>
-    /* Styling based on TriliumNext theme */
+    /* Styling based on TriliumNext modern theme */
     body {
-        background-color: white;
+        font-family: system-ui, -apple-system, Roboto, sans-serif;
+        background-color: #FFFFFF;
+        color: #14161B;
+        padding: 4px 12px;
         margin-bottom: 5em; /* FABs */
     }
     :root {
-        --card-border-color: #eaeaea;
-        --card-shadow-color: rgba(0,0,0,0.1);
-        --card-background-color: #f5f5f5;
+        --card-border-color: #E2E8F0;
+        --card-shadow-color: rgba(15, 23, 42, 0.06);
+        --card-background-color: #F3F5F9;
+    }
+    a {
+        color: #4F46E5;
+        text-decoration: none;
     }
     @media (prefers-color-scheme: dark) {
         body {
-            background-color: black;
-            color: white;
+            background-color: #14161B;
+            color: #E6EDF3;
         }
         :root {
-            --card-border-color: #222222;
-            --card-background-color: #ffffff12;
+            --card-border-color: #2A2F3A;
+            --card-background-color: #1E222B;
         }
-        a {
-            color: rgba(57, 186, 230, .7);
-        }
-        a:visited {
-            color: rgba(67, 186, 230, .7);
+        a, a:visited {
+            color: #818CF8;
         }
     }
     .note-list-container {
         display: flex;
         flex-direction: column;
-        gap: 5px;
+        gap: 8px;
     }
     .note-book-card {
         max-height: 10em;
         border: 1px solid var(--card-border-color);
-        box-shadow: 2px 3px 4px var(--card-shadow-color);
-        border-radius: 12px;
+        box-shadow: 0 2px 6px var(--card-shadow-color);
+        border-radius: 14px;
         background-color: var(--card-background-color);
         overflow: hidden;
     }
     .note-book-header {
-        font-size: 1em;
-        font-weight: bold;
-        padding: 0.5em 1rem;
+        font-size: 0.98em;
+        font-weight: 600;
+        padding: 0.55em 1rem;
         margin: 0px;
         line-height: 1.5em;
         height: 1.5em;
@@ -50,5 +54,7 @@
     }
     .note-book-content {
         margin: 0.5em 1rem;
+        font-size: 0.92em;
+        opacity: 0.88;
     }
 </style>

@@ -2,6 +2,8 @@ package eu.fliegendewurst.triliumdroid.dialog
 
 import android.annotation.SuppressLint
 import android.util.Log
+import android.view.View
+import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.Spinner
@@ -16,6 +18,12 @@ import kotlinx.coroutines.launch
 
 object ConfigureWidgetDialog {
 	private const val TAG = "ConfigureWidgetDialog"
+
+	/**
+	 * Index of the quick note entry in R.array.widget_actions_array.
+	 */
+	private const val ACTION_INDEX_QUICK_NOTE = 2
+	const val ACTION_QUICK_NOTE = "quickNote"
 
 	@SuppressLint("SetTextI18n")
 	fun showDialog(activity: AppCompatActivity, appWidgetId: Int, callback: () -> Unit) {
@@ -57,6 +65,17 @@ object ConfigureWidgetDialog {
 				}
 			}
 		}
+
+		// the quick note action always targets today's journal note, no note selection needed
+		actionSpinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+			override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+				val needsNote = position != ACTION_INDEX_QUICK_NOTE
+				buttonSelectNote.isEnabled = needsNote
+				noteSelected.isEnabled = needsNote
+			}
+
+			override fun onNothingSelected(parent: AdapterView<*>?) {}
+		}
 	}
 
 	private fun done(
@@ -64,6 +83,10 @@ object ConfigureWidgetDialog {
 		actionIndex: Int,
 		note: String
 	) {
+		if (actionIndex == ACTION_INDEX_QUICK_NOTE) {
+			Preferences.setWidgetAction(appWidgetId, ACTION_QUICK_NOTE)
+			return
+		}
 		val noteId = if (note.contains(':')) {
 			note.split(':')[0]
 		} else {
