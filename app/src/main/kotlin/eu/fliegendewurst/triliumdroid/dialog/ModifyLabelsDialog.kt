@@ -210,5 +210,6 @@ object ModifyLabelsDialog {
 		currentNote.clearAttributeCache()
 		Notes.notes[currentNote.id]?.clearAttributeCache()
 		activity.refreshWidgets(currentNote)
+		activity.triggerAutoSyncIfEnabled()
 	}
 }

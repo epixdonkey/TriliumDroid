@@ -13,6 +13,7 @@ import eu.fliegendewurst.triliumdroid.util.Preferences
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
@@ -145,8 +146,11 @@ object ConnectionUtil {
 	private suspend fun reset(appContext: Context, done: () -> Unit) = withContext(Dispatchers.IO) {
 		var clientBuilder = OkHttpClient.Builder()
 			.cookieJar(CookieJar())
-			// bump timeout from default 10s to 30s
-			.readTimeout(30, TimeUnit.SECONDS)
+			.retryOnConnectionFailure(true)
+			.connectTimeout(30, TimeUnit.SECONDS)
+			.readTimeout(90, TimeUnit.SECONDS)
+			.writeTimeout(90, TimeUnit.SECONDS)
+			.connectionPool(okhttp3.ConnectionPool(5, 1, TimeUnit.MINUTES))
 
 		// mTLS authentication setup
 		var pk: PrivateKey? = null
@@ -378,9 +382,22 @@ object ConnectionUtil {
 							callbackError(MismatchedDatabaseException())
 							return
 						}
+						val matcher = Regex("""Non-matching sync versions, local is version (\d+), remote is""").find(msg)
+						if (matcher != null) {
+							val remoteVer = matcher.groupValues[1].toIntOrNull()
+							if (remoteVer != null && Cache.Versions.SUPPORTED_SYNC_VERSIONS.contains(remoteVer)) {
+								Preferences.setSyncVersion(remoteVer)
+								syncVersion = remoteVer
+								runBlocking {
+									connect(server, callback, callbackError)
+								}
+								return
+							}
+						}
 						for (version in Cache.Versions.SUPPORTED_SYNC_VERSIONS) {
 							if (msg.startsWith("Non-matching sync versions, local is version $version, remote is")) {
 								Preferences.setSyncVersion(version)
+								syncVersion = version
 								runBlocking {
 									connect(server, callback, callbackError)
 								}
@@ -448,9 +465,55 @@ object ConnectionUtil {
 		})
 	}
 
-	fun doSyncPushRequest(uri: String, data: JSONObject) {
+	suspend fun doSyncRequestSuspend(uri: String): JSONObject = suspendCancellableCoroutine { cont ->
+		val req = Request.Builder()
+			.get()
+			.url("$server$uri")
+			.build()
+		Log.i(TAG, uri)
+		val call = client!!.newCall(req)
+		cont.invokeOnCancellation {
+			call.cancel()
+		}
+		call.enqueue(object : Callback {
+			override fun onResponse(call: Call, response: Response) {
+				response.use {
+					try {
+						val body = response.body ?: throw IOException("Empty body in sync response")
+						if (body.contentLength() >= 30000000) {
+							Log.e(TAG, "sync data too big: ${body.contentLength()} bytes > 30 MB")
+							cont.resumeWith(Result.failure(SyncResponseTooBigException))
+							return
+						}
+						val bodyStr = body.string()
+						if (!response.isSuccessful) {
+							cont.resumeWith(Result.failure(IOException("HTTP ${response.code}: $bodyStr")))
+							return
+						}
+						val json = JSONObject(bodyStr)
+						cont.resumeWith(Result.success(json))
+					} catch (e: Exception) {
+						Log.e(TAG, "failed to read sync response", e)
+						cont.resumeWith(Result.failure(e))
+					}
+				}
+			}
+
+			override fun onFailure(call: Call, e: IOException) {
+				Log.e(TAG, "failed to fetch sync data", e)
+				cont.resumeWith(Result.failure(e))
+			}
+		})
+	}
+
+	/**
+	 * Push entities to the sync server. Suspends until the server has
+	 * acknowledged the request; throws if the request fails, so callers
+	 * must not treat the data as synced before this returns normally.
+	 */
+	suspend fun doSyncPushRequest(uri: String, data: JSONObject) {
 		val dataBody = data.toString(0)
-		Log.i(TAG, "syncing ${data.length()} bytes of data")
+		Log.i(TAG, "syncing ${dataBody.length} bytes of data")
 		val req = Request.Builder()
 			.header("pageCount", "1")
 			.header("pageIndex", "0")
@@ -459,15 +522,32 @@ object ConnectionUtil {
 			.url("$server$uri")
 			.build()
 		Log.i(TAG, uri)
-		client!!.newCall(req).enqueue(object : Callback {
-			override fun onResponse(call: Call, response: Response) {
-				response.use {}
+		return suspendCancellableCoroutine { cont ->
+			val call = client!!.newCall(req)
+			cont.invokeOnCancellation {
+				call.cancel()
 			}
+			call.enqueue(object : Callback {
+				override fun onResponse(call: Call, response: Response) {
+					response.use {
+						if (!it.isSuccessful) {
+							cont.resumeWith(
+								Result.failure(
+									IOException("push failed: HTTP ${it.code}")
+								)
+							)
+							return
+						}
+						cont.resumeWith(Result.success(Unit))
+					}
+				}
 
-			override fun onFailure(call: Call, e: IOException) {
-				Log.e(TAG, "failed to push sync data", e)
-			}
-		})
+				override fun onFailure(call: Call, e: IOException) {
+					Log.e(TAG, "failed to push sync data", e)
+					cont.resumeWith(Result.failure(e))
+				}
+			})
+		}
 	}
 
 	/**

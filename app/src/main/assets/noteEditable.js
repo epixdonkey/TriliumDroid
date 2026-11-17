@@ -154,6 +154,9 @@ const TEXT_FORMATTING_GROUP = {
 };
 /* reference: https://github.com/TriliumNext/Notes/blob/v0.93.0/src/public/app/widgets/type_widgets/ckeditor/config.ts#L104-L185 */
 function buildToolbarConfig(isClassicToolbar) {
+    if (isClassicToolbar) {
+        return buildClassicToolbar(false);
+    }
     return buildMobileToolbar();
 }
 
@@ -231,8 +234,7 @@ function buildClassicToolbar(multilineToolbar) {
 
 /* reference: https://github.com/TriliumNext/Notes/blob/v0.93.0/src/public/app/widgets/type_widgets/editable_text.ts */
 var editor = document.querySelector(".note-detail-editable-text-editor");
-// The Decoupled Editor is unusable on mobile, since the toolbar tooltips are obscured by the action bar.
-const isClassicEditor = false;
+const isClassicEditor = true;
 const editorClass = isClassicEditor ? CKEditor.DecoupledEditor : CKEditor.BalloonEditor;
 const watchdog = new CKEditor.EditorWatchdog(editorClass, {
     // An average number of milliseconds between the last editor errors (defaults to 5000).
@@ -296,10 +298,25 @@ watchdog.on("stateChange", () => {
     }
 });
 var updateTimeoutID = -1;
+var isInitializing = true;
+var isDirty = false;
+var hasSavedChanges = false;
 function scheduledUpdate() {
+    clearTimeout(updateTimeoutID);
+    updateTimeoutID = -1;
+    if (!isDirty || !watchdog.editor) {
+        return hasSavedChanges;
+    }
+    isDirty = false;
+    hasSavedChanges = true;
     api.updateExcalidrawNote(noteId, watchdog.editor.getData());
+    return true;
 }
 function scheduleUpdate() {
+    if (isInitializing) {
+        return;
+    }
+    isDirty = true;
     clearTimeout(updateTimeoutID);
     updateTimeoutID = setTimeout(scheduledUpdate, 1000);
 }
@@ -348,27 +365,9 @@ watchdog.setCreator(async (elementOrData, editorConfig) => {
     if (isClassicEditor) {
         let $classicToolbarWidget = document.querySelector(".classic-toolbar-widget");
 
-        // TODO: $classicToolbarWidget.empty();
         if ($classicToolbarWidget) {
             $classicToolbarWidget.innerHTML = "";
             $classicToolbarWidget.appendChild(editor.ui.view.toolbar.element);
-        }
-
-        // Reposition all dropdowns to point upwards instead of downwards.
-        // See https://ckeditor.com/docs/ckeditor5/latest/examples/framework/bottom-toolbar-editor.html for more info.
-        const toolbarView = editor.ui.view.toolbar;
-        for (const item of toolbarView.items) {
-            if (!("panelView" in item)) {
-                continue;
-            }
-
-            item.on("change:isOpen", () => {
-                if ( !item.isOpen ) {
-                    return;
-                }
-
-                item.panelView.position = item.panelView.position.replace("s", "n");
-            });
         }
     }
 
@@ -400,7 +399,10 @@ await watchdog.create(editor, {
 });
 const resp = await fetch("/note-raw/" + noteId);
 const html = await resp.text();
+isInitializing = true;
 watchdog.editor.setData(html);
+isInitializing = false;
+isDirty = false;
 }
 
 initialize();

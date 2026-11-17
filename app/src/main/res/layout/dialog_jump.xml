@@ -18,6 +18,14 @@
         android:inputType="text"
         tools:ignore="LabelFor" />
 
+    <CheckBox
+        android:id="@+id/jump_search_content"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginEnd="16dp"
+        android:text="@string/search_in_content" />
+
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/jump_to_list"
         android:layout_width="match_parent"

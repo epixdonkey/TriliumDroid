@@ -73,6 +73,10 @@ class Note(
 		return getLabelValue(name)?.value
 	}
 
+	suspend fun hasLabel(name: String): Boolean {
+		return getLabelValue(name) != null
+	}
+
 	suspend fun getLabelValue(name: String): Label? {
 		if (!inheritableCached) {
 			cacheInheritableAttributes()
@@ -158,7 +162,7 @@ class Note(
 		// handle templates
 		var template = getRelation("template")
 		if (template != null) {
-			template = Notes.getNoteWithContent(template.id)!!
+			template = Notes.getNoteWithContent(template.id) ?: template
 			// add attributes
 			template.cacheInheritableAttributes()
 			for (label in template.labels.orEmpty()) {
@@ -183,6 +187,11 @@ class Note(
 					inheritedRelations = filteredRelations // not sure this is needed
 				}
 			}
+		}
+		if (icon == null) {
+			icon = (labels.orEmpty() + inheritedLabels.orEmpty())
+				.firstOrNull { it.name == "iconClass" }
+				?.value
 		}
 		// check for (inherited) label:ABC attributes
 		for (label in getLabels()) {
