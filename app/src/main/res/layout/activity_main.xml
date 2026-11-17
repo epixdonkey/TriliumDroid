@@ -59,30 +59,82 @@
             app:navGraph="@navigation/nav_graph"
             tools:layout="@layout/fragment_note" />
 
-        <com.google.android.material.floatingactionbutton.FloatingActionButton
-            android:id="@+id/fab_tree"
+        <LinearLayout
+            android:id="@+id/fab_container_left"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_alignParentStart="true"
             android:layout_alignParentBottom="true"
             android:layout_margin="16dp"
-            android:backgroundTint="@color/secondary_light"
-            android:contentDescription="@string/fab_tree_description"
-            android:src="@drawable/bx_align_left"
-            app:borderWidth="0dp" />
+            android:gravity="center_horizontal"
+            android:orientation="vertical">
 
-        <com.google.android.material.floatingactionbutton.FloatingActionButton
-            android:id="@+id/fab"
+            <com.google.android.material.floatingactionbutton.FloatingActionButton
+                android:id="@+id/fab_tree"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:backgroundTint="@color/secondary_light"
+                android:contentDescription="@string/fab_tree_description"
+                android:src="@drawable/bx_align_left"
+                app:borderWidth="0dp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/fab_container_right"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_alignParentEnd="true"
             android:layout_alignParentBottom="true"
             android:layout_margin="16dp"
-            android:backgroundTint="@color/secondary_light"
-            android:contentDescription="@string/fab_description"
-            android:src="@drawable/bx_send"
-            app:borderWidth="0dp"
-            tools:ignore="RelativeOverlap" />
+            android:gravity="center_horizontal"
+            android:orientation="vertical"
+            tools:ignore="RelativeOverlap">
+
+            <com.google.android.material.floatingactionbutton.FloatingActionButton
+                android:id="@+id/fab"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:backgroundTint="@color/secondary_light"
+                android:contentDescription="@string/fab_description"
+                android:src="@drawable/bx_send"
+                app:borderWidth="0dp" />
+        </LinearLayout>
+
+        <!-- shown while the app is locked by the biometric lock, covers all content -->
+        <LinearLayout
+            android:id="@+id/biometric_lock_overlay"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@color/background"
+            android:clickable="true"
+            android:elevation="16dp"
+            android:focusable="true"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <ImageView
+                android:layout_width="96dp"
+                android:layout_height="96dp"
+                android:contentDescription="@string/description_app_icon"
+                android:src="@mipmap/ic_launcher_round" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/section_margin"
+                android:text="@string/biometric_locked_label"
+                android:textColor="@color/foreground"
+                android:textSize="@dimen/big_text_size" />
+
+            <Button
+                android:id="@+id/button_biometric_unlock"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/section_margin"
+                android:paddingHorizontal="@dimen/section_margin"
+                android:text="@string/biometric_unlock_button" />
+        </LinearLayout>
     </RelativeLayout>
 
     <LinearLayout

@@ -27,3 +27,10 @@ local.properties
 /app/src/web/web.zip
 /result
 /*.logcat
+
+# signing keys must never be committed
+debug.keystore
+*.keystore
+*.jks
+!debug.keystore.asc
+/app/build/

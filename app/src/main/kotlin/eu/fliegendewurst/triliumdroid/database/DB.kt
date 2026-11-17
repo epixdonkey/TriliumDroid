@@ -211,6 +211,15 @@ object DB {
 			Blobs.fixupBrokenBlobIDs()
 		}
 		Preferences.setDatabaseMigration(MAX_MIGRATION)
+		try {
+			db!!.execSQL("CREATE INDEX IF NOT EXISTS idx_attributes_noteId_name ON attributes(noteId, name)")
+			db!!.execSQL("CREATE INDEX IF NOT EXISTS idx_attributes_name_value ON attributes(name, value)")
+			db!!.execSQL("CREATE INDEX IF NOT EXISTS idx_branches_parentNoteId ON branches(parentNoteId)")
+			db!!.execSQL("CREATE INDEX IF NOT EXISTS idx_branches_noteId ON branches(noteId)")
+			db!!.execSQL("CREATE INDEX IF NOT EXISTS idx_notes_blobId ON notes(blobId)")
+		} catch (e: Exception) {
+			Log.w(TAG, "failed to create helper indexes", e)
+		}
 	}
 
 	fun nukeDatabase(context: Context) {
@@ -229,10 +238,22 @@ object DB {
 		Preferences.setDatabaseMigration(MAX_MIGRATION)
 	}
 
+	fun isOpen(): Boolean = db?.isOpen == true
+
 	fun closeDatabase() {
 		Log.d(TAG, "closing database")
-		db?.close()
-		dbHelper?.close()
+		try {
+			db?.close()
+		} catch (e: Exception) {
+			Log.w(TAG, "error closing db", e)
+		}
+		try {
+			dbHelper?.close()
+		} catch (e: Exception) {
+			Log.w(TAG, "error closing dbHelper", e)
+		}
+		db = null
+		dbHelper = null
 	}
 
 	/**

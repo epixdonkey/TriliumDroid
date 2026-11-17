@@ -136,9 +136,21 @@ class GraphView(context: Context, attributes: AttributeSet?) : View(context, att
 	private val chargeDistanceMax = 1000F
 	private var chargeStrength = 0F
 
+	@Volatile
 	private var counter: Int = 0
 	private var velocities: MutableMap<Note, Position> = mutableMapOf()
+
+	@Volatile
 	private var attached: Boolean = true
+
+	/**
+	 * Set while a simulation tick is running on its worker thread.
+	 */
+	@Volatile
+	private var simulationInFlight: Boolean = false
+
+	private var loggedChargeSkip = false
+	private var loggedTitleSkip = false
 
 	override fun onDetachedFromWindow() {
 		super.onDetachedFromWindow()
@@ -148,12 +160,48 @@ class GraphView(context: Context, attributes: AttributeSet?) : View(context, att
 	private val count: MutableMap<NoteId, Int> = mutableMapOf()
 	private val bias: MutableMap<Pair<Note, Note>, Float> = mutableMapOf()
 
+	/**
+	 * Schedule the next simulation tick. The actual computation runs on a
+	 * worker thread: with large graphs a single tick can take seconds (the
+	 * charge pass is O(V^2)), which used to block the UI thread long enough
+	 * to trigger ANRs.
+	 */
 	private fun updatePositions() {
-		val start = System.currentTimeMillis()
 		if (g.nodes.isEmpty()) {
 			(context as MainActivity).handler.postDelayed(this::updatePositions, simulationDelay)
 			return
 		}
+		if (!attached || counter > 200) {
+			return
+		}
+		if (simulationInFlight) {
+			// previous tick still computing, try again later
+			(context as MainActivity).handler.postDelayed(this::updatePositions, simulationDelay)
+			return
+		}
+		simulationInFlight = true
+		Thread {
+			val changed = doSimulationStep()
+			simulationInFlight = false
+			if (attached && changed) {
+				// drawing a huge graph takes seconds per frame -- throttle
+				// repaints so the UI thread stays responsive
+				if (g.nodes.size <= 1000 || counter % 5 == 0) {
+					(context as MainActivity).handler.post { invalidate() }
+				}
+				(context as MainActivity).handler.postDelayed(this::updatePositions, simulationDelay)
+			}
+		}.start()
+	}
+
+	/**
+	 * One iteration of the force simulation. Runs on a worker thread; only
+	 * ever overwrites existing keys in the position/velocity maps, so the
+	 * (main thread) draw code can safely iterate them.
+	 * Returns false when the simulation has converged or should stop.
+	 */
+	private fun doSimulationStep(): Boolean {
+		val start = System.currentTimeMillis()
 		if (counter == 0) {
 			val nodeLinkRatio = g.nodes.size.toFloat() / g.edges.size.toFloat()
 			val magnifiedRatio = nodeLinkRatio.pow(1.5F)
@@ -191,11 +239,11 @@ class GraphView(context: Context, attributes: AttributeSet?) : View(context, att
 			}
 		}
 		if (!attached || counter > 200) {
-			return
+			return false
 		}
 		alpha += (alphaTarget - alpha) * alphaDecay
 		if (alpha < alphaMin) {
-			return
+			return false
 		}
 		counter++
 		var sx = 0F
@@ -235,21 +283,31 @@ class GraphView(context: Context, attributes: AttributeSet?) : View(context, att
 			velocities[source] = targetV.add(Position(x * (1F - link.value), y * (1F - link.value)))
 		}
 		// crappy charge simulation
-		for (nodeA in g.nodes) {
-			for (nodeB in g.nodes) {
-				if (nodeA.id.rawId() >= nodeB.id.rawId()) {
-					continue
-				}
-				val posA = g.vertexPositions[nodeA]!!
-				val posB = g.vertexPositions[nodeB]!!
-				val dist = posA.distance(posB)
-				val minDist = 400F
-				if (dist < minDist * minDist) {
-					val power = min(10F, minDist / sqrt(dist))
-					val scale = 0.18F
-					val delta = posB.subtract(posA)
-					velocities[nodeA] = velocities[nodeA]!!.add(delta.scale(-scale * power))
-					velocities[nodeB] = velocities[nodeB]!!.add(delta.scale(scale * power))
+		if (g.nodes.size > 400) {
+			// O(V^2) with expensive map lookups: already ~25 seconds per tick
+			// for a few thousand nodes. Link forces alone keep the layout
+			// usable on huge graphs.
+			if (!loggedChargeSkip) {
+				Log.i(TAG, "skipping O(n^2) charge pass for ${g.nodes.size} nodes")
+				loggedChargeSkip = true
+			}
+		} else {
+			for (nodeA in g.nodes) {
+				for (nodeB in g.nodes) {
+					if (nodeA.id.rawId() >= nodeB.id.rawId()) {
+						continue
+					}
+					val posA = g.vertexPositions[nodeA]!!
+					val posB = g.vertexPositions[nodeB]!!
+					val dist = posA.distance(posB)
+					val minDist = 400F
+					if (dist < minDist * minDist) {
+						val power = min(10F, minDist / sqrt(dist))
+						val scale = 0.18F
+						val delta = posB.subtract(posA)
+						velocities[nodeA] = velocities[nodeA]!!.add(delta.scale(-scale * power))
+						velocities[nodeB] = velocities[nodeB]!!.add(delta.scale(scale * power))
+					}
 				}
 			}
 		}
@@ -263,16 +321,25 @@ class GraphView(context: Context, attributes: AttributeSet?) : View(context, att
 		}
 		val end = System.currentTimeMillis()
 		if (end - start > 16) {
-			Log.w(TAG, "update of ${g.nodes.size} nodes took ${end - start} ms")
+			Log.i(TAG, "update of ${g.nodes.size} nodes took ${end - start} ms")
 		}
-		invalidate()
-		(context as MainActivity).handler.postDelayed(this::updatePositions, simulationDelay)
+		return true
 	}
 
 	public override fun onDraw(canvas: Canvas) {
 		super.onDraw(canvas)
 
 		if (g.nodes.isEmpty()) {
+			// graph is still being built on its worker thread
+			val text = context.getString(R.string.map_building)
+			fontPaint.textSize = 40f
+			canvas.drawText(
+				text,
+				(width - fontPaint.measureText(text)) / 2F,
+				height / 2F,
+				fontPaint
+			)
+			fontPaint.textSize = 24f
 			return
 		}
 		// offset and scale to fit
@@ -305,19 +372,31 @@ class GraphView(context: Context, attributes: AttributeSet?) : View(context, att
 					canvas.drawColor(Color.WHITE)
 				}
 
-				val height = 20
-				val offset = 7
+			val height = 20
+			val offset = 7
 
+			// drawing tens of thousands of labels would block the UI thread
+			// for seconds -- on huge graphs show plain dots instead
+			val showTitles = g.nodes.size <= 1000
+			val showEdges = g.edges.size <= 1000
+			if (!showTitles && !loggedTitleSkip) {
+				Log.i(TAG, "skipping node titles for ${g.nodes.size} nodes")
+				loggedTitleSkip = true
+			}
+
+			if (showEdges) {
 				for (i in 0 until g.edges.size) {
-					val a = g.edges[i]
+				val a = g.edges[i]
 
-					val sourcePos = g.vertexPositions[a.source]!!
-					val targetPos = g.vertexPositions[a.target]!!
+				val sourcePos = g.vertexPositions[a.source]!!
+				val targetPos = g.vertexPositions[a.target]!!
 
-					edgePath.reset()
-					edgePath.moveTo(sourcePos.x, sourcePos.y)
-					edgePath.lineTo(targetPos.x, targetPos.y)
+				edgePath.reset()
+				edgePath.moveTo(sourcePos.x, sourcePos.y)
+				edgePath.lineTo(targetPos.x, targetPos.y)
+				if (showTitles) {
 					drawTextOnPath(a.data.name, edgePath, 0f, 30f, fontPaintEdgeLabel)
+				}
 					val dx = targetPos.x - sourcePos.x
 					val dy = targetPos.y - sourcePos.y
 					var angle = atan2(dy, dx) - PI.toFloat() / 2F
@@ -339,9 +418,20 @@ class GraphView(context: Context, attributes: AttributeSet?) : View(context, att
 					edgePath.lineTo(targetPos.x + x2, targetPos.y - y2 + yf * height - offset)
 					drawPath(edgePath, paint)
 				}
+				}
 
 				for (ns in g.nodes) {
 					val pos = g.vertexPositions[ns]!!
+					if (!showTitles) {
+						drawOval(
+							pos.x - 10F,
+							pos.y - 10F,
+							pos.x + 10F,
+							pos.y + 10F,
+							backgroundPaint
+						)
+						continue
+					}
 					val title = ns.title()
 					val width = title.length * 15
 					drawOval(

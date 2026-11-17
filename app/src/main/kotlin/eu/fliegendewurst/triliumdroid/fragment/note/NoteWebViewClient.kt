@@ -374,28 +374,70 @@ class NoteWebViewClient(
 						|<script type="module" src="/noteMath.js"></script>
 					""".trimMargin().encodeToByteArray()
 				}
+				val accentHex = eu.fliegendewurst.triliumdroid.util.ThemeManager.primaryHex()
 				data += """<style>
+					|body {
+					|	font-family: system-ui, -apple-system, Roboto, sans-serif;
+					|	line-height: 1.55;
+					|	padding: 8px 14px 64px 14px;
+					|	margin: 0;
+					|	color: #14161B;
+					|	background-color: #FFFFFF;
+					|}
+					|a {
+					|	color: $accentHex;
+					|	text-decoration: none;
+					|}
 					|img {
 					|	max-width: 100% !important;
 					|	height: auto !important;
+					|	border-radius: 8px;
+					|}
+					|pre, code {
+					|	font-family: ui-monospace, monospace;
+					|	background-color: #F3F5F9;
+					|	border-radius: 8px;
+					|}
+					|pre {
+					|	padding: 10px 12px;
+					|	overflow-x: auto;
+					|}
+					|code {
+					|	padding: 2px 5px;
+					|}
+					|blockquote {
+					|	margin: 8px 0;
+					|	padding: 6px 12px;
+					|	border-left: 4px solid $accentHex;
+					|	background-color: #F3F5F9;
+					|	border-radius: 0 8px 8px 0;
+					|}
+					|table {
+					|	border-collapse: collapse;
+					|	border-radius: 8px;
+					|	overflow: hidden;
 					|}
 					|th {
-					|	background-color: #f5f5f5;
+					|	background-color: #F3F5F9;
 					|}
 					|th, td {
-					|	border: 1px solid #bfbfbf;
-					|	padding: .4em;
+					|	border: 1px solid #D0D7DE;
+					|	padding: .45em .65em;
 					|}
 					|tr {
 					|	border-width: 0;
 					|}
 					|@media (prefers-color-scheme: dark) {
-					|	* {
-					|		color: white;
-					|		background-color: black;
+					|	body {
+					|		color: #E6EDF3;
+					|		background-color: #14161B;
 					|	}
-					|	th {
-					|		background-color: #555;
+					|	pre, code, blockquote, th {
+					|		background-color: #1E222B;
+					|		color: #E6EDF3;
+					|	}
+					|	th, td {
+					|		border-color: #30363D;
 					|	}
 					|}
 					|</style>""".trimMargin().encodeToByteArray()
