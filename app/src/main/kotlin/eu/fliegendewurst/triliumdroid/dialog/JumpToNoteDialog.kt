@@ -1,6 +1,7 @@
 package eu.fliegendewurst.triliumdroid.dialog
 
 import android.view.WindowManager
+import android.widget.CheckBox
 import android.widget.EditText
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -14,6 +15,8 @@ import eu.fliegendewurst.triliumdroid.data.Branch
 import eu.fliegendewurst.triliumdroid.data.BranchId
 import eu.fliegendewurst.triliumdroid.database.Cache
 import eu.fliegendewurst.triliumdroid.database.Notes
+import eu.fliegendewurst.triliumdroid.util.Preferences
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
@@ -45,6 +48,8 @@ object JumpToNoteDialog {
 		dialog.window!!.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE)
 		dialog.show()
 		val input = dialog.findViewById<EditText>(R.id.jump_input)!!
+		val searchContentCheck = dialog.findViewById<CheckBox>(R.id.jump_search_content)!!
+		searchContentCheck.isChecked = Preferences.searchInContent()
 		if (initialText != null) {
 			input.text.insert(0, initialText)
 		}
@@ -57,14 +62,17 @@ object JumpToNoteDialog {
 		})
 		list.adapter = adapter2
 		input.requestFocus()
-		input.addTextChangedListener {
+		var searchJob: Job? = null
+		fun performSearch() {
+			searchJob?.cancel()
 			val searchString = input.text.toString()
 			if (searchString.length < 3) {
 				adapter2.submitList(emptyList())
-				return@addTextChangedListener
+				return
 			}
-			activity.lifecycleScope.launch {
-				val results = Cache.getJumpToResults(searchString)
+			val inContent = searchContentCheck.isChecked
+			searchJob = activity.lifecycleScope.launch {
+				val results = Cache.getJumpToResults(searchString, inContent)
 				val stuff = results.map {
 					Pair(
 						Branch(
@@ -82,6 +90,16 @@ object JumpToNoteDialog {
 					adapter2.submitList(stuff)
 				}
 			}
+		}
+		input.addTextChangedListener {
+			performSearch()
+		}
+		searchContentCheck.setOnCheckedChangeListener { _, isChecked ->
+			Preferences.setSearchInContent(isChecked)
+			performSearch()
+		}
+		if (initialText != null && initialText.length >= 3) {
+			performSearch()
 		}
 	}
 }

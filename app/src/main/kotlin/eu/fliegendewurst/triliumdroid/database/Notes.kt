@@ -57,7 +57,12 @@ object Notes {
 		notes.clear()
 	}
 
-	suspend fun createChildNote(parentNote: Note, newNoteTitle: String?): Note {
+	suspend fun createChildNote(
+		parentNote: Note,
+		newNoteTitle: String?,
+		type: String = "text",
+		mime: String = "text/html"
+	): Note {
 		// create entries in notes, blobs, branches
 		var newId = NoteId(DB.newId("notes", "noteId ") { Util.newNoteId() })
 		val dateModified = dateModified()
@@ -69,8 +74,8 @@ object Notes {
 			Pair("noteId", newId),
 			Pair("title", newNoteTitle),
 			Pair("isProtected", false),
-			Pair("type", "text"),
-			Pair("mime", "text/html"),
+			Pair("type", type),
+			Pair("mime", mime),
 			Pair("isDeleted", false),
 			Pair("deleteId", null),
 			Pair("dateCreated", dateModified),
@@ -83,9 +88,9 @@ object Notes {
 		registerEntityChangeNote(
 			Note(
 				newId,
-				"text/html",
+				mime,
 				newNoteTitle ?: "",
-				"text",
+				type,
 				false,
 				null,
 				dateModified,
@@ -145,6 +150,16 @@ object Notes {
 		}
 		return getNoteInternal(id)
 	}
+
+	/**
+	 * Like [getNote], but unconditionally reloads the note from the database,
+	 * so labels and relations are populated -- cache entries created by the
+	 * tree rebuild do not carry attributes.
+	 */
+	suspend fun getNoteWithRelations(id: NoteId): Note? =
+		withContext(Dispatchers.IO) {
+			getNoteInternal(id)
+		}
 
 
 	private suspend fun getNoteInternal(id: NoteId): Note? = withContext(Dispatchers.IO) {
@@ -260,6 +275,9 @@ object Notes {
 			val previous = notes[id]
 			note!!.branches = previous?.branches ?: mutableListOf()
 			note!!.children = previous?.children
+			if (note!!.icon == null) {
+				note!!.icon = previous?.icon
+			}
 			previous?.setLabels(labels)
 			previous?.setRelations(relations)
 			notes[id] = note!!
@@ -373,7 +391,14 @@ object Notes {
 		val note = getNote(branch.note) ?: return@withContext false
 		Log.i(TAG, "deleting note ${branch.note}")
 		// delete child notes if this is the last branch of this note
-		if (note.branches.size == 1) {
+		// (counted in the database -- the cached branch list is often stale)
+		val liveBranches = DB.rawQuery(
+			"SELECT COUNT(*) FROM branches WHERE noteId = ? AND isDeleted = 0",
+			arrayOf(branch.note.id)
+		).use {
+			if (it.moveToFirst()) it.getInt(0) else 0
+		}
+		if (liveBranches <= 1) {
 			for (child in note.children ?: emptySet()) {
 				val id2 = child.note
 				val note2 = getNote(id2)!!
@@ -398,6 +423,21 @@ object Notes {
 			parentNote.children = null
 		}
 		return@withContext true
+	}
+
+	/**
+	 * Mark a note as deleted when it has no live branch left (e.g. after a
+	 * merge removed the only branch but the note row survived).
+	 */
+	suspend fun markNoteDeleted(id: NoteId) = withContext(Dispatchers.IO) {
+		val note = getNote(id) ?: return@withContext
+		if (note.deleted) {
+			return@withContext
+		}
+		DB.update(id, Pair("isDeleted", true), Pair("deleteId", Util.randomString(10)))
+		notes.remove(id)
+		note.id = NoteId("DELETED")
+		registerEntityChangeNote(note)
 	}
 }
 

@@ -7,4 +7,26 @@
         android:id="@+id/webview_editable"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
+
+    <ScrollView
+        android:id="@+id/code_editor_container"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:fillViewport="true"
+        android:visibility="gone">
+
+        <EditText
+            android:id="@+id/code_editor"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@android:color/transparent"
+            android:fontFamily="monospace"
+            android:gravity="top|start"
+            android:importantForAutofill="no"
+            android:inputType="textMultiLine|textNoSuggestions"
+            android:padding="12dp"
+            android:scrollbars="vertical"
+            android:textColor="@color/foreground"
+            android:textSize="14sp" />
+    </ScrollView>
 </RelativeLayout>

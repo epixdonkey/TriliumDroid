@@ -9,6 +9,8 @@
     <!-- TODO: investigate whether the permission below works at all -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-permission android:name="android.permission.USE_FINGERPRINT" />
 
     <queries>
         <intent>
@@ -40,6 +42,18 @@
                 android:resource="@xml/note_widget_info" />
         </receiver>
 
+        <receiver
+            android:name=".widget.QuickNoteWidget"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/quick_note_widget_info" />
+        </receiver>
+
         <activity
             android:name=".activity.main.MainActivity"
             android:exported="true">
@@ -54,6 +68,7 @@
 
                 <data android:mimeType="text/plain" />
                 <data android:mimeType="text/html" />
+                <data android:mimeType="image/*" />
             </intent-filter>
         </activity>
         <activity android:name=".activity.SetupActivity" />

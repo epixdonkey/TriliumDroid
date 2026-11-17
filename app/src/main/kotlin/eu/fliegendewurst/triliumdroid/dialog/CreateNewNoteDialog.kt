@@ -53,5 +53,6 @@ object CreateNewNoteDialog {
 		dialog.dismiss()
 		activity.navigateTo(note)
 		activity.refreshTree()
+		activity.triggerAutoSyncIfEnabled()
 	}
 }
